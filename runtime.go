@@ -245,7 +245,7 @@ func (r *runtime) CompileModule(ctx context.Context, binary []byte) (CompiledMod
 	// TODO: lazy initialization of memory definition.
 	internal.BuildMemoryDefinitions()
 
-	c := &compiledModule{module: internal, compiledEngine: r.store.Engine}
+	c := &compiledModule{module: internal, compiledEngine: r.store.Engine, compiledStore: r.store}
 
 	// typeIDs are static and compile-time known.
 	typeIDs, err := r.store.GetFunctionTypeIDs(internal.TypeSection)
@@ -333,8 +333,17 @@ func (r *runtime) InstantiateModule(
 		name = code.module.NameSection.ModuleName
 	}
 
-	// Instantiate the module.
-	mod, err = r.store.Instantiate(ctx, code.module, name, sysCtx, code.typeIDs)
+	// Instantiate the module. typeIDs are only valid in the store that
+	// interned them: a module compiled by another Runtime (e.g. one sharing a
+	// CompilationCache) must have them re-interned here, otherwise import
+	// resolution and call_indirect checks compare IDs from different spaces.
+	typeIDs := code.typeIDs
+	if code.compiledStore != r.store {
+		if typeIDs, err = r.store.GetFunctionTypeIDs(code.module.TypeSection); err != nil {
+			return nil, err
+		}
+	}
+	mod, err = r.store.Instantiate(ctx, code.module, name, sysCtx, typeIDs)
 	if err != nil {
 		// If there was an error, don't leak the compiled module.
 		if code.closeWithModule {

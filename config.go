@@ -364,6 +364,10 @@ type compiledModule struct {
 	module *wasm.Module
 	// compiledEngine holds an engine on which `module` is compiled.
 	compiledEngine wasm.Engine
+	// compiledStore holds the store whose type-ID space typeIDs belong to.
+	// A CompiledModule instantiated in a different Runtime (e.g. sharing a
+	// CompilationCache) must re-intern its typeIDs in that Runtime's store.
+	compiledStore *wasm.Store
 	// closeWithModule prevents leaking compiled code when a module is compiled implicitly.
 	closeWithModule bool
 	typeIDs         []wasm.FunctionTypeID
