@@ -259,23 +259,28 @@ signatures:
 blk0: (exec_ctx:i64, module_ctx:i64)
 	Jump blk1
 
-blk1: () <-- (blk0,blk1)
-	v2:i64 = Load exec_ctx, 0x58
-	CallIndirect v2:sig2, exec_ctx
-	Jump blk1
+blk1: () <-- (blk0,blk4)
+	v2:i64 = Load exec_ctx, 0x4e0
+	v3:i64 = Load v2, 0x0
+	v4:i64 = Iconst_64 0x0
+	v5:i32 = Icmp neq, v3, v4
+	v6:i64 = Load exec_ctx, 0x4e8
+	v7:i64 = Iconst_64 0x1
+	v8:i64 = Isub v6, v7
+	Store v8, exec_ctx, 0x4e8
+	v9:i32 = Icmp le_s, v8, v4
+	v10:i32 = Bor v5, v9
+	Brnz v10, blk3
+	Jump blk4
 
 blk2: ()
-`,
-			expAfterPasses: `
-signatures:
-	sig2: i64_v
 
-blk0: (exec_ctx:i64, module_ctx:i64)
-	Jump fallthrough
+blk3: () <-- (blk1)
+	v11:i64 = Load exec_ctx, 0x58
+	CallIndirect v11:sig2, exec_ctx
+	Jump blk4
 
-blk1: () <-- (blk0,blk1)
-	v2:i64 = Load exec_ctx, 0x58
-	CallIndirect v2:sig2, exec_ctx
+blk4: () <-- (blk1,blk3)
 	Jump blk1
 `,
 		},

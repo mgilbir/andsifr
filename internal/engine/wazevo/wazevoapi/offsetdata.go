@@ -74,6 +74,14 @@ const (
 	// where locals are mirrored inside try_table bodies, so that handler blocks
 	// can read throw-time local values after stack-clone restore.
 	ExecutionContextOffsetLocalsSaveAreaPtr Offset = 1240
+	// ExecutionContextOffsetEntryModuleClosedPtr is an offset of `entryModuleClosedPtr` field in wazevo.executionContext.
+	// It points to the entry module instance's Closed field; compiled code loads through it
+	// at loop headers when ensureTermination is enabled.
+	ExecutionContextOffsetEntryModuleClosedPtr Offset = 1248
+	// ExecutionContextOffsetTerminationCheckCounter is an offset of `terminationCheckCounter` field in wazevo.executionContext.
+	// Compiled code decrements it at loop headers when ensureTermination is enabled and calls the
+	// check-module-exit-code trampoline when it reaches zero, yielding to the Go scheduler.
+	ExecutionContextOffsetTerminationCheckCounter Offset = 1256
 )
 
 // ModuleContextOffsetData allows the compilers to get the information about offsets to the fields of wazevo.moduleContextOpaque,
