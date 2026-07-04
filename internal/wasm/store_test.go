@@ -952,7 +952,48 @@ func TestModuleInstance_applyData(t *testing.T) {
 		})
 		require.EqualError(t, err, "data[0]: out of bounds memory access")
 	})
+	t.Run("pre-applied data skips copies but keeps validation", func(t *testing.T) {
+		buf := make([]byte, 10)
+		m := &ModuleInstance{MemoryInstance: &MemoryInstance{
+			Buffer:    buf,
+			expBuffer: preappliedLinearMemory{buf: buf},
+		}}
+		err := m.applyData([]DataSegment{
+			{OffsetExpression: NewConstantExpressionFromI32(0), Init: []byte{0xa, 0xf}},
+		})
+		require.NoError(t, err)
+		// Copy skipped: buffer untouched.
+		require.Equal(t, make([]byte, 10), m.MemoryInstance.Buffer)
+		// Passive data instances still registered.
+		require.Equal(t, [][]byte{{0xa, 0xf}}, m.DataInstances)
+
+		// Bounds still validated.
+		err = m.applyData([]DataSegment{
+			{OffsetExpression: NewConstantExpressionFromI32(9), Init: []byte{0x1, 0x2}},
+		})
+		require.EqualError(t, err, "data[0]: out of bounds memory access")
+
+		// Shared memories never skip.
+		shared := &ModuleInstance{MemoryInstance: &MemoryInstance{
+			Buffer:    make([]byte, 10),
+			Shared:    true,
+			expBuffer: preappliedLinearMemory{buf: buf},
+		}}
+		err = shared.applyData([]DataSegment{
+			{OffsetExpression: NewConstantExpressionFromI32(0), Init: []byte{0xa, 0xf}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, []byte{0xa, 0xf}, shared.MemoryInstance.Buffer[:2])
+	})
 }
+
+// preappliedLinearMemory implements experimental.LinearMemory and
+// experimental.MemoryWithPreappliedData for applyData tests.
+type preappliedLinearMemory struct{ buf []byte }
+
+func (m preappliedLinearMemory) Reallocate(size uint64) []byte { return m.buf[:size] }
+func (m preappliedLinearMemory) Free()                         {}
+func (m preappliedLinearMemory) PreappliedData() bool          { return true }
 
 func globalsContain(globals []*GlobalInstance, want *GlobalInstance) bool {
 	for _, f := range globals {

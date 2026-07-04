@@ -42,6 +42,25 @@ type LinearMemory interface {
 	Free()
 }
 
+// MemoryWithPreappliedData is an optional interface a LinearMemory may
+// implement to declare that its initial contents already include the
+// module's active data segments — for example a copy-on-write view of the
+// memory of a previously initialized instance of the same module. When it
+// returns true, instantiation skips copying active data segments into the
+// memory; active-segment bounds are still validated and passive data
+// instances are still registered.
+//
+// The host is responsible for the returned memory actually matching the
+// module's post-initialization state: mismatched contents change guest
+// semantics (though isolation between instances is unaffected, since
+// contents come only from the host-provided image). Shared memories are
+// not supported.
+type MemoryWithPreappliedData interface {
+	// PreappliedData reports whether active data segments are already
+	// present in the memory returned by Reallocate.
+	PreappliedData() bool
+}
+
 // WithMemoryAllocator registers the given MemoryAllocator into the given
 // context.Context. The context must be passed when initializing a module.
 func WithMemoryAllocator(ctx context.Context, allocator MemoryAllocator) context.Context {
