@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/experimental"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/ssa"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/testcases"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/wazevoapi"
-	"github.com/tetratelabs/wazero/internal/testing/require"
-	"github.com/tetratelabs/wazero/internal/wasm"
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/experimental"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/ssa"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/testcases"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/wazevoapi"
+	"github.com/mgilbir/andsifr/internal/testing/require"
+	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
 func TestCompiler_LowerToSSA(t *testing.T) {

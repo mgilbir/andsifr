@@ -10,10 +10,10 @@ import (
 	goruntime "runtime"
 	"sync"
 
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/internal/filecache"
-	"github.com/tetratelabs/wazero/internal/version"
-	"github.com/tetratelabs/wazero/internal/wasm"
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/internal/filecache"
+	"github.com/mgilbir/andsifr/internal/version"
+	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
 // CompilationCache reduces time spent compiling (Runtime.CompileModule) the same wasm module.

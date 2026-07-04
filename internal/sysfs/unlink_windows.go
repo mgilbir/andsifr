@@ -4,7 +4,7 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/tetratelabs/wazero/experimental/sys"
+	"github.com/mgilbir/andsifr/experimental/sys"
 )
 
 func unlink(name string) sys.Errno {

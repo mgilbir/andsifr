@@ -6,14 +6,14 @@ import (
 	_ "embed"
 	"testing"
 
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/experimental"
-	"github.com/tetratelabs/wazero/experimental/logging"
-	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
-	internal "github.com/tetratelabs/wazero/internal/emscripten"
-	"github.com/tetratelabs/wazero/internal/testing/binaryencoding"
-	"github.com/tetratelabs/wazero/internal/testing/require"
-	"github.com/tetratelabs/wazero/internal/wasm"
+	"github.com/mgilbir/andsifr"
+	"github.com/mgilbir/andsifr/experimental"
+	"github.com/mgilbir/andsifr/experimental/logging"
+	"github.com/mgilbir/andsifr/imports/wasi_snapshot_preview1"
+	internal "github.com/mgilbir/andsifr/internal/emscripten"
+	"github.com/mgilbir/andsifr/internal/testing/binaryencoding"
+	"github.com/mgilbir/andsifr/internal/testing/require"
+	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
 const (

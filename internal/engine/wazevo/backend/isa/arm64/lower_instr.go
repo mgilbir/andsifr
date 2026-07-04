@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/backend/regalloc"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/ssa"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/wazevoapi"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/backend/regalloc"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/ssa"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/wazevoapi"
 )
 
 // LowerSingleBranch implements backend.Machine.

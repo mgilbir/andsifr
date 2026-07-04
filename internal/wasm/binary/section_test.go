@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/internal/testing/binaryencoding"
-	"github.com/tetratelabs/wazero/internal/testing/require"
-	"github.com/tetratelabs/wazero/internal/wasm"
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/internal/testing/binaryencoding"
+	"github.com/mgilbir/andsifr/internal/testing/require"
+	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
 func TestTableSection(t *testing.T) {

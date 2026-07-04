@@ -7,9 +7,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/mgilbir/andsifr"
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/imports/wasi_snapshot_preview1"
 )
 
 // greetWasm was compiled using `tinygo build -o greet.wasm -scheduler=none --no-debug -target=wasi greet.go`

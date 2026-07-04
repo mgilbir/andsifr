@@ -8,8 +8,8 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/tetratelabs/wazero/internal/testing/require"
-	"github.com/tetratelabs/wazero/sys"
+	"github.com/mgilbir/andsifr/internal/testing/require"
+	"github.com/mgilbir/andsifr/sys"
 )
 
 func Test_NewStat_t(t *testing.T) {

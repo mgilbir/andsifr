@@ -1,7 +1,7 @@
 package binaryencoding
 
 import (
-	"github.com/tetratelabs/wazero/internal/wasm"
+	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
 // EncodeTable returns the wasm.Table encoded in WebAssembly 1.0 (20191205) Binary Format.

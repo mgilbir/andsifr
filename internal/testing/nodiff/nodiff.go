@@ -10,13 +10,13 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/experimental"
-	"github.com/tetratelabs/wazero/experimental/logging"
-	"github.com/tetratelabs/wazero/internal/testing/binaryencoding"
-	"github.com/tetratelabs/wazero/internal/testing/require"
-	"github.com/tetratelabs/wazero/internal/wasm"
+	"github.com/mgilbir/andsifr"
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/experimental"
+	"github.com/mgilbir/andsifr/experimental/logging"
+	"github.com/mgilbir/andsifr/internal/testing/binaryencoding"
+	"github.com/mgilbir/andsifr/internal/testing/require"
+	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
 // We haven't had public APIs for referencing all the imported entries from wazero.CompiledModule,

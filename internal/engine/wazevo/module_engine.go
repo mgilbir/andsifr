@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/experimental"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/wazevoapi"
-	"github.com/tetratelabs/wazero/internal/internalapi"
-	"github.com/tetratelabs/wazero/internal/wasm"
-	"github.com/tetratelabs/wazero/internal/wasmdebug"
-	"github.com/tetratelabs/wazero/internal/wasmruntime"
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/experimental"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/wazevoapi"
+	"github.com/mgilbir/andsifr/internal/internalapi"
+	"github.com/mgilbir/andsifr/internal/wasm"
+	"github.com/mgilbir/andsifr/internal/wasmdebug"
+	"github.com/mgilbir/andsifr/internal/wasmruntime"
 )
 
 type (

@@ -1,8 +1,8 @@
 package amd64
 
 import (
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/backend/regalloc"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/ssa"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/backend/regalloc"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/ssa"
 )
 
 // regAllocFn implements regalloc.Function.

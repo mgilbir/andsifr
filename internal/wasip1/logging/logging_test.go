@@ -3,11 +3,11 @@ package logging
 import (
 	"testing"
 
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/internal/logging"
-	"github.com/tetratelabs/wazero/internal/testing/require"
-	. "github.com/tetratelabs/wazero/internal/wasip1"
-	"github.com/tetratelabs/wazero/internal/wasm"
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/internal/logging"
+	"github.com/mgilbir/andsifr/internal/testing/require"
+	. "github.com/mgilbir/andsifr/internal/wasip1"
+	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
 type testFunctionDefinition struct {

@@ -20,11 +20,11 @@ import (
 	"context"
 	"encoding/binary"
 
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/experimental/sys"
-	"github.com/tetratelabs/wazero/internal/wasip1"
-	"github.com/tetratelabs/wazero/internal/wasm"
+	"github.com/mgilbir/andsifr"
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/experimental/sys"
+	"github.com/mgilbir/andsifr/internal/wasip1"
+	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
 // ModuleName is the module name WASI functions are exported into.

@@ -5,8 +5,8 @@ package sysfs
 import (
 	"io/fs"
 
-	experimentalsys "github.com/tetratelabs/wazero/experimental/sys"
-	"github.com/tetratelabs/wazero/sys"
+	experimentalsys "github.com/mgilbir/andsifr/experimental/sys"
+	"github.com/mgilbir/andsifr/sys"
 )
 
 func inoFromFileInfo(_ string, info fs.FileInfo) (sys.Inode, experimentalsys.Errno) {

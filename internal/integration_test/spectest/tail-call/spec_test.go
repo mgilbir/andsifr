@@ -5,11 +5,11 @@ import (
 	"embed"
 	"testing"
 
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/experimental"
-	"github.com/tetratelabs/wazero/internal/integration_test/spectest"
-	"github.com/tetratelabs/wazero/internal/platform"
+	"github.com/mgilbir/andsifr"
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/experimental"
+	"github.com/mgilbir/andsifr/internal/integration_test/spectest"
+	"github.com/mgilbir/andsifr/internal/platform"
 )
 
 //go:embed testdata/*.wasm

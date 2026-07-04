@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/backend"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/backend/regalloc"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/ssa"
-	"github.com/tetratelabs/wazero/internal/testing/require"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/backend"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/backend/regalloc"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/ssa"
+	"github.com/mgilbir/andsifr/internal/testing/require"
 )
 
 func Test_asImm12(t *testing.T) {

@@ -3,8 +3,8 @@ package regalloc
 import (
 	"testing"
 
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/ssa"
-	"github.com/tetratelabs/wazero/internal/testing/require"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/ssa"
+	"github.com/mgilbir/andsifr/internal/testing/require"
 )
 
 func TestRegTypeOf(t *testing.T) {

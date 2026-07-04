@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	experimentalsys "github.com/tetratelabs/wazero/experimental/sys"
-	"github.com/tetratelabs/wazero/sys"
+	experimentalsys "github.com/mgilbir/andsifr/experimental/sys"
+	"github.com/mgilbir/andsifr/sys"
 )
 
 func NewStdioFile(stdin bool, f fs.File) (experimentalsys.File, error) {

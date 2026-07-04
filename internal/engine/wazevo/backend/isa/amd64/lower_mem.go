@@ -3,9 +3,9 @@ package amd64
 import (
 	"fmt"
 
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/backend"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/backend/regalloc"
-	"github.com/tetratelabs/wazero/internal/engine/wazevo/ssa"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/backend"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/backend/regalloc"
+	"github.com/mgilbir/andsifr/internal/engine/wazevo/ssa"
 )
 
 var addendsMatchOpcodes = [...]ssa.Opcode{ssa.OpcodeUExtend, ssa.OpcodeSExtend, ssa.OpcodeIadd, ssa.OpcodeIconst, ssa.OpcodeIshl}

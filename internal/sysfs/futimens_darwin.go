@@ -4,7 +4,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	experimentalsys "github.com/tetratelabs/wazero/experimental/sys"
+	experimentalsys "github.com/mgilbir/andsifr/experimental/sys"
 )
 
 const _UTIME_OMIT = -2

@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	experimentalsys "github.com/tetratelabs/wazero/experimental/sys"
-	"github.com/tetratelabs/wazero/internal/fstest"
-	"github.com/tetratelabs/wazero/internal/platform"
-	"github.com/tetratelabs/wazero/internal/sysfs"
-	"github.com/tetratelabs/wazero/internal/testing/require"
-	"github.com/tetratelabs/wazero/sys"
+	experimentalsys "github.com/mgilbir/andsifr/experimental/sys"
+	"github.com/mgilbir/andsifr/internal/fstest"
+	"github.com/mgilbir/andsifr/internal/platform"
+	"github.com/mgilbir/andsifr/internal/sysfs"
+	"github.com/mgilbir/andsifr/internal/testing/require"
+	"github.com/mgilbir/andsifr/sys"
 )
 
 func TestContext_WalltimeNanos(t *testing.T) {

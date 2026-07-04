@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"math"
 
-	"github.com/tetratelabs/wazero/internal/leb128"
-	"github.com/tetratelabs/wazero/internal/wasm"
+	"github.com/mgilbir/andsifr/internal/leb128"
+	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
 const ExportedFunctionName = "f"

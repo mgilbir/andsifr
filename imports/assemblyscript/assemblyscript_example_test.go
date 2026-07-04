@@ -4,8 +4,8 @@ import (
 	"context"
 	_ "embed"
 
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/imports/assemblyscript"
+	"github.com/mgilbir/andsifr"
+	"github.com/mgilbir/andsifr/imports/assemblyscript"
 )
 
 // This shows how to instantiate AssemblyScript's special imports.

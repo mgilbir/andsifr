@@ -5,7 +5,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/tetratelabs/wazero/experimental/sys"
+	"github.com/mgilbir/andsifr/experimental/sys"
 )
 
 var (

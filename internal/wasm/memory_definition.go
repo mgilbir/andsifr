@@ -1,8 +1,8 @@
 package wasm
 
 import (
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/internal/internalapi"
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/internal/internalapi"
 )
 
 // ImportedMemories implements the same method as documented on wazero.CompiledModule.

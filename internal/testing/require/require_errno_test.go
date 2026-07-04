@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/tetratelabs/wazero/experimental/sys"
+	"github.com/mgilbir/andsifr/experimental/sys"
 )
 
 func TestEqualErrno(t *testing.T) {

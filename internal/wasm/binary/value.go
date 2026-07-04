@@ -7,8 +7,8 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/tetratelabs/wazero/internal/leb128"
-	"github.com/tetratelabs/wazero/internal/wasm"
+	"github.com/mgilbir/andsifr/internal/leb128"
+	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
 func decodeValueTypes(r *bytes.Reader, num uint32) ([]wasm.ValueType, error) {
