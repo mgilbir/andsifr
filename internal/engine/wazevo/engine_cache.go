@@ -99,15 +99,27 @@ func (e *engine) addCompiledModuleToMemory(m *wasm.Module, cm *compiledModule) *
 }
 
 func (e *engine) getCompiledModuleFromMemory(module *wasm.Module, increaseRefCount bool) (cm *compiledModule, ok bool) {
+	// The instantiation path (NewModuleEngine) only reads the map; taking the
+	// write lock there serializes concurrent instantiations of the same
+	// compiled module, which hosts doing instantiate-per-call feel directly.
+	if !increaseRefCount {
+		e.mux.RLock()
+		defer e.mux.RUnlock()
+
+		cmWithCount, ok := e.compiledModules[module.ID]
+		if ok {
+			return cmWithCount.compiledModule, true
+		}
+		return nil, false
+	}
+
 	e.mux.Lock()
 	defer e.mux.Unlock()
 
 	cmWithCount, ok := e.compiledModules[module.ID]
 	if ok {
 		cm = cmWithCount.compiledModule
-		if increaseRefCount {
-			cmWithCount.refCount++
-		}
+		cmWithCount.refCount++
 	}
 	return
 }
