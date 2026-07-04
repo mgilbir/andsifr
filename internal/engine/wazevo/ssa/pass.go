@@ -26,6 +26,7 @@ func (b *builder) runPreBlockLayoutPasses() {
 	passCalculateImmediateDominators(b)
 	passRedundantPhiEliminationOpt(b)
 	passNopInstElimination(b)
+	passRedundantLoadEliminationOpt(b)
 
 	// TODO: implement either conversion of irreducible CFG into reducible one, or irreducible CFG detection where we panic.
 	// 	WebAssembly program shouldn't result in irreducible CFG, but we should handle it properly in just in case.
