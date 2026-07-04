@@ -144,8 +144,27 @@ type (
 		// localsSaveAreaPtr points to the tryHandler's localsSaveArea slice
 		// backing array. Handlers load locals from this slice.
 		localsSaveAreaPtr uintptr
+		// entryModuleClosedPtr points to the Closed field of the entry module instance.
+		// When ensureTermination is enabled, compiled code loads through it at loop
+		// headers and takes the check-module-exit-code slow path once the value
+		// becomes non-zero (i.e. the module was closed, e.g. on context
+		// cancellation/timeout).
+		entryModuleClosedPtr *atomic.Uint64
+		// terminationCheckCounter is decremented by compiled code at every loop
+		// header when ensureTermination is enabled. When it reaches zero, the
+		// check-module-exit-code trampoline is invoked, which both checks for
+		// closure and acts as a Go scheduler yield point; the Go side then resets
+		// the counter to terminationCheckInterval.
+		terminationCheckCounter int64
 	}
 )
+
+// terminationCheckInterval is the number of loop iterations between two
+// invocations of the check-module-exit-code trampoline when ensureTermination
+// is enabled. It bounds how long a Wasm loop can run without yielding to the
+// Go scheduler while keeping the per-iteration cost to a few inline
+// instructions.
+const terminationCheckInterval = 1 << 16
 
 func (c *callEngine) requiredInitialStackSize() int {
 	const initialStackSizeDefault = 10240
@@ -332,6 +351,8 @@ func (c *callEngine) callWithStack(ctx context.Context, paramResultStack []uint6
 	}()
 
 	if ensureTermination {
+		c.execCtx.entryModuleClosedPtr = &m.Closed
+		c.execCtx.terminationCheckCounter = terminationCheckInterval
 		done := m.CloseModuleOnCanceledOrTimeout(ctx)
 		defer done()
 	}
@@ -485,6 +506,8 @@ func (c *callEngine) callWithStack(ctx context.Context, paramResultStack []uint6
 			if err := m.FailIfClosed(); err != nil {
 				panic(err)
 			}
+			// Restart the countdown until compiled code takes this slow path again.
+			c.execCtx.terminationCheckCounter = terminationCheckInterval
 			c.execCtx.exitCode = wazevoapi.ExitCodeOK
 			afterGoFunctionCallEntrypoint(c.execCtx.goCallReturnAddress, c.execCtxPtr,
 				uintptr(unsafe.Pointer(c.execCtx.stackPointerBeforeGoCall)), c.execCtx.framePointerBeforeGoCall)
