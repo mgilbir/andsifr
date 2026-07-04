@@ -350,6 +350,85 @@ blk0: (v0:i32, v1:i64)
 	Return v0, v1, v7, v9
 `,
 		},
+		{
+			name:     "redundant load elimination",
+			pass:     passRedundantLoadEliminationOpt,
+			postPass: passDeadCodeEliminationOpt,
+			setup: func(b *builder) (verifier func(t *testing.T)) {
+				entry := b.AllocateBasicBlock()
+				b.SetCurrentBlock(entry)
+
+				ptr := entry.AddParam(b, TypeI64)
+				other := entry.AddParam(b, TypeI64)
+
+				// Two identical loads: the second is redundant.
+				load1 := b.AllocateInstruction().AsLoad(ptr, 0, TypeI64).Insert(b).Return()
+				load2 := b.AllocateInstruction().AsLoad(ptr, 0, TypeI64).Insert(b).Return()
+
+				// A store to a disjoint range of the same base does not invalidate.
+				b.AllocateInstruction().AsStore(OpcodeStore, load1, ptr, 0x100).Insert(b)
+				load3 := b.AllocateInstruction().AsLoad(ptr, 0, TypeI64).Insert(b).Return()
+
+				// The stored value is forwarded to a same-typed load from the same address.
+				load4 := b.AllocateInstruction().AsLoad(ptr, 0x100, TypeI64).Insert(b).Return()
+
+				// A load with a different width from the same address is not reused.
+				load5 := b.AllocateInstruction().AsExtLoad(OpcodeUload8, ptr, 0, true).Insert(b).Return()
+
+				// A store to a different base invalidates everything.
+				b.AllocateInstruction().AsStore(OpcodeStore, load1, other, 0x800).Insert(b)
+				load6 := b.AllocateInstruction().AsLoad(ptr, 0, TypeI64).Insert(b).Return()
+
+				// A base of the form Iadd(ptr, constant) is decomposed, so this
+				// aliases with a load from ptr at the matching static offset.
+				c := b.AllocateInstruction().AsIconst64(0x10).Insert(b).Return()
+				derived := b.AllocateInstruction().AsIadd(ptr, c).Insert(b).Return()
+				load7 := b.AllocateInstruction().AsLoad(derived, 0, TypeI64).Insert(b).Return()
+				load8 := b.AllocateInstruction().AsLoad(ptr, 0x10, TypeI64).Insert(b).Return()
+
+				ret := b.AllocateInstruction()
+				args := b.varLengthPool.Allocate(8)
+				args = args.Append(&b.varLengthPool, load1)
+				args = args.Append(&b.varLengthPool, load2)
+				args = args.Append(&b.varLengthPool, load3)
+				args = args.Append(&b.varLengthPool, load4)
+				args = args.Append(&b.varLengthPool, load5)
+				args = args.Append(&b.varLengthPool, load6)
+				args = args.Append(&b.varLengthPool, load7)
+				args = args.Append(&b.varLengthPool, load8)
+				ret.AsReturn(args)
+				b.InsertInstruction(ret)
+				return nil
+			},
+			before: `
+blk0: (v0:i64, v1:i64)
+	v2:i64 = Load v0, 0x0
+	v3:i64 = Load v0, 0x0
+	Store v2, v0, 0x100
+	v4:i64 = Load v0, 0x0
+	v5:i64 = Load v0, 0x100
+	v6:i64 = Uload8 v0, 0x0
+	Store v2, v1, 0x800
+	v7:i64 = Load v0, 0x0
+	v8:i64 = Iconst_64 0x10
+	v9:i64 = Iadd v0, v8
+	v10:i64 = Load v9, 0x0
+	v11:i64 = Load v0, 0x10
+	Return v2, v3, v4, v5, v6, v7, v10, v11
+`,
+			after: `
+blk0: (v0:i64, v1:i64)
+	v2:i64 = Load v0, 0x0
+	Store v2, v0, 0x100
+	v6:i64 = Uload8 v0, 0x0
+	Store v2, v1, 0x800
+	v7:i64 = Load v0, 0x0
+	v8:i64 = Iconst_64 0x10
+	v9:i64 = Iadd v0, v8
+	v10:i64 = Load v9, 0x0
+	Return v2, v2, v2, v2, v6, v7, v10, v10
+`,
+		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
