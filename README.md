@@ -2,6 +2,14 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tetratelabs/wazero.svg)](https://pkg.go.dev/github.com/tetratelabs/wazero) [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+> **Note:** This is [@mgilbir](https://github.com/mgilbir)'s fork of
+> [tetratelabs/wazero](https://github.com/tetratelabs/wazero), carrying a
+> handful of performance patches while they're upstreamed. It is not affiliated
+> with or endorsed by Tetrate. See the [upstream repository][upstream] for the
+> canonical project.
+
+[upstream]: https://github.com/tetratelabs/wazero
+
 WebAssembly is a way to safely run code compiled in other languages. Runtimes
 execute WebAssembly Modules (Wasm), which are most often binaries with a `.wasm`
 extension.
