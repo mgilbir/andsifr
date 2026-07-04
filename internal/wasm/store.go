@@ -271,6 +271,16 @@ func (m *ModuleInstance) validateData(data []DataSegment) (err error) {
 // bounds memory access error here is not a validation error, but rather a runtime error.
 func (m *ModuleInstance) applyData(data []DataSegment) error {
 	m.DataInstances = make([][]byte, len(data))
+	// A host-provided memory may already contain the active data segments
+	// (experimental.MemoryWithPreappliedData, e.g. a copy-on-write view of a
+	// previously initialized instance); bounds are still validated below and
+	// passive data instances still registered, only the copies are skipped.
+	skipCopy := false
+	if mem := m.MemoryInstance; mem != nil && mem.expBuffer != nil && !mem.Shared {
+		if p, ok := mem.expBuffer.(experimental.MemoryWithPreappliedData); ok && p.PreappliedData() {
+			skipCopy = true
+		}
+	}
 	for i := range data {
 		d := &data[i]
 		m.DataInstances[i] = d.Init
@@ -280,7 +290,9 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 			if offset < 0 || offset+len(d.Init) > len(m.MemoryInstance.Buffer) {
 				return fmt.Errorf("%s[%d]: out of bounds memory access", SectionIDName(SectionIDData), i)
 			}
-			copy(m.MemoryInstance.Buffer[offset:], d.Init)
+			if !skipCopy {
+				copy(m.MemoryInstance.Buffer[offset:], d.Init)
+			}
 		}
 	}
 	return nil
