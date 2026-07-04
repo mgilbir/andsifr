@@ -49,7 +49,9 @@ type (
 		addendsWorkQueue wazevoapi.Queue[ssa.Value]
 		addends32        wazevoapi.Queue[addend32]
 		// addends64 is used during address lowering, defined here for reuse.
-		addends64              wazevoapi.Queue[regalloc.VReg]
+		addends64 wazevoapi.Queue[regalloc.VReg]
+		// addendsShifted is used during address lowering, defined here for reuse.
+		addendsShifted         wazevoapi.Queue[addendShifted]
 		unresolvedAddressModes []*instruction
 
 		// condBrRelocs holds the conditional branches which need offset relocation.

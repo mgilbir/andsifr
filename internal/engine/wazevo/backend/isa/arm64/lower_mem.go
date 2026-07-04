@@ -269,21 +269,79 @@ func (m *machine) lowerStore(si *ssa.Instruction) {
 
 // lowerToAddressMode converts a pointer to an addressMode that can be used as an operand for load/store instructions.
 func (m *machine) lowerToAddressMode(ptr ssa.Value, offsetBase uint32, size byte) (amode *addressMode) {
-	// TODO: currently the instruction selection logic doesn't support addressModeKindRegScaledExtended and
-	// addressModeKindRegScaled since collectAddends doesn't take ssa.OpcodeIshl into account. This should be fixed
-	// to support more efficient address resolution.
-
-	a32s, a64s, offset := m.collectAddends(ptr)
+	a32s, a64s, aShifted, offset := m.collectAddends(ptr)
 	offset += int64(offsetBase)
-	return m.lowerToAddressModeFromAddends(a32s, a64s, size, offset)
+	return m.lowerToAddressModeFromAddends(a32s, a64s, aShifted, size, offset)
 }
 
 // lowerToAddressModeFromAddends creates an addressMode from a list of addends collected by collectAddends.
 // During the construction, this might emit additional instructions.
 //
 // Extracted as a separate function for easy testing.
-func (m *machine) lowerToAddressModeFromAddends(a32s *wazevoapi.Queue[addend32], a64s *wazevoapi.Queue[regalloc.VReg], size byte, offset int64) (amode *addressMode) {
+func (m *machine) lowerToAddressModeFromAddends(a32s *wazevoapi.Queue[addend32], a64s *wazevoapi.Queue[regalloc.VReg], aShifted *wazevoapi.Queue[addendShifted], size byte, offset int64) (amode *addressMode) {
 	amode = m.amodePool.Allocate()
+
+	// If one of the addends is a left-shifted index whose shift amount matches the
+	// access size, it can be folded into a scaled addressing mode
+	// (e.g. ldr x1, [x2, x3, lsl #3] / ldr w1, [x2, w3, uxtw #2]).
+	// Only one addend fits the index register slot; the remaining ones are
+	// materialized into plain 64-bit addends below.
+	var scaledIndex addendShifted
+	var scaledIndexValid bool
+	for !aShifted.Empty() {
+		s := aShifted.Dequeue()
+		if !scaledIndexValid && s.shift == amode.sizeInBitsToShiftAmount(size) {
+			scaledIndex, scaledIndexValid = s, true
+		} else {
+			// Materialize the shifted (and possibly extended) value into a plain register.
+			r := s.r
+			if s.ext != extendOpNone {
+				extended := m.compiler.AllocateVReg(ssa.TypeI64)
+				ext := m.allocateInstr()
+				ext.asExtend(extended, r, 32, 64, s.ext == extendOpSXTW)
+				m.insert(ext)
+				r = extended
+			}
+			shifted := m.compiler.AllocateVReg(ssa.TypeI64)
+			shift := m.allocateInstr()
+			shift.asALUShift(aluOpLsl, shifted, operandNR(r), operandShiftImm(s.shift), true)
+			m.insert(shift)
+			a64s.Enqueue(shifted)
+		}
+	}
+
+	if scaledIndexValid {
+		var base regalloc.VReg
+		if !a64s.Empty() {
+			base = a64s.Dequeue()
+		} else {
+			// No 64-bit base addend: materialize the static offset (possibly zero) as the base.
+			base = m.compiler.AllocateVReg(ssa.TypeI64)
+			m.lowerConstantI64(base, offset)
+			offset = 0
+		}
+		if scaledIndex.ext != extendOpNone {
+			*amode = addressMode{kind: addressModeKindRegScaledExtended, rn: base, rm: scaledIndex.r, extOp: scaledIndex.ext}
+		} else {
+			*amode = addressMode{kind: addressModeKindRegScaled, rn: base, rm: scaledIndex.r, extOp: extendOpUXTX /* indicates index reg is 64-bit */}
+		}
+
+		baseReg := amode.rn
+		if offset > 0 {
+			baseReg = m.addConstToReg64(baseReg, offset) // baseReg += offset
+		}
+		for !a64s.Empty() {
+			a64 := a64s.Dequeue()
+			baseReg = m.addReg64ToReg64(baseReg, a64) // baseReg += a64
+		}
+		for !a32s.Empty() {
+			a32 := a32s.Dequeue()
+			baseReg = m.addRegToReg64Ext(baseReg, a32.r, a32.ext) // baseReg += (a32 extended to 64-bit)
+		}
+		amode.rn = baseReg
+		return
+	}
+
 	switch a64sExist, a32sExist := !a64s.Empty(), !a32s.Empty(); {
 	case a64sExist && a32sExist:
 		var base regalloc.VReg
@@ -354,12 +412,24 @@ func (m *machine) lowerToAddressModeFromAddends(a32s *wazevoapi.Queue[addend32],
 	return
 }
 
-var addendsMatchOpcodes = [4]ssa.Opcode{ssa.OpcodeUExtend, ssa.OpcodeSExtend, ssa.OpcodeIadd, ssa.OpcodeIconst}
+// addendShifted is a 64-bit addend of the form `r << shift` (optionally with `r`
+// being a 32-bit register extended by ext), which can be folded into a scaled
+// addressing mode when the shift amount matches the access size.
+type addendShifted struct {
+	r     regalloc.VReg
+	ext   extendOp // extendOpNone unless r is a 32-bit register to be extended.
+	shift byte     // left-shift amount, in [1, 4].
+}
 
-func (m *machine) collectAddends(ptr ssa.Value) (addends32 *wazevoapi.Queue[addend32], addends64 *wazevoapi.Queue[regalloc.VReg], offset int64) {
+var addendsMatchOpcodes = [5]ssa.Opcode{ssa.OpcodeUExtend, ssa.OpcodeSExtend, ssa.OpcodeIadd, ssa.OpcodeIconst, ssa.OpcodeIshl}
+
+var addendExtendsMatchOpcodes = [2]ssa.Opcode{ssa.OpcodeUExtend, ssa.OpcodeSExtend}
+
+func (m *machine) collectAddends(ptr ssa.Value) (addends32 *wazevoapi.Queue[addend32], addends64 *wazevoapi.Queue[regalloc.VReg], addendsShifted *wazevoapi.Queue[addendShifted], offset int64) {
 	m.addendsWorkQueue.Reset()
 	m.addends32.Reset()
 	m.addends64.Reset()
+	m.addendsShifted.Reset()
 	m.addendsWorkQueue.Enqueue(ptr)
 
 	for !m.addendsWorkQueue.Empty() {
@@ -410,12 +480,48 @@ func (m *machine) collectAddends(ptr ssa.Value) (addends32 *wazevoapi.Queue[adde
 			}
 			def.Instr.MarkLowered()
 			continue
+		case ssa.OpcodeIshl:
+			// If the addend is a left shift by a constant in [1, 4], it is a candidate for a
+			// scaled addressing mode (or an add with a shifted register operand). Note that
+			// values in the work queue are always 64-bit here: 32-bit (shift) arithmetic is
+			// only ever reachable through an extend, which terminates the walk above, and
+			// folding a shift through an extend would change the wrap-around semantics.
+			x, amount := def.Instr.Arg2()
+			amountDef := m.compiler.ValueDefinition(amount)
+			if x.Type().Bits() == 64 && amountDef.IsFromInstr() && amountDef.Instr.Constant() {
+				if shift := byte(amountDef.Instr.ConstantVal() & 63); 1 <= shift && shift <= 4 {
+					xDef := m.compiler.ValueDefinition(x)
+					// If the shifted value is itself a 32-bit extend, fold it as well so that
+					// the scaled+extended addressing mode (e.g. [x2, w3, uxtw #2]) applies.
+					if xop := m.compiler.MatchInstrOneOf(xDef, addendExtendsMatchOpcodes[:]); xop != ssa.OpcodeInvalid {
+						input := xDef.Instr.Arg()
+						inputDef := m.compiler.ValueDefinition(input)
+						if input.Type().Bits() == 32 && !(inputDef.IsFromInstr() && inputDef.Instr.Constant()) {
+							var ext extendOp
+							if xop == ssa.OpcodeUExtend {
+								ext = extendOpUXTW
+							} else {
+								ext = extendOpSXTW
+							}
+							m.addendsShifted.Enqueue(addendShifted{r: m.getOperand_NR(inputDef, extModeNone).nr(), ext: ext, shift: shift})
+							xDef.Instr.MarkLowered()
+							def.Instr.MarkLowered()
+							continue
+						}
+					}
+					m.addendsShifted.Enqueue(addendShifted{r: m.getOperand_NR(m.compiler.ValueDefinition(x), extModeNone).nr(), ext: extendOpNone, shift: shift})
+					def.Instr.MarkLowered()
+					continue
+				}
+			}
+			// Unfoldable shift: use the shift result as an ordinary addend without merging.
+			m.addends64.Enqueue(m.getOperand_NR(def, extModeZeroExtend64 /* optional zero ext */).nr())
 		default:
 			// If the addend is not one of them, we simply use it as-is (without merging!), optionally zero-extending it.
 			m.addends64.Enqueue(m.getOperand_NR(def, extModeZeroExtend64 /* optional zero ext */).nr())
 		}
 	}
-	return &m.addends32, &m.addends64, offset
+	return &m.addends32, &m.addends64, &m.addendsShifted, offset
 }
 
 func (m *machine) addConstToReg64(r regalloc.VReg, c int64) (rd regalloc.VReg) {

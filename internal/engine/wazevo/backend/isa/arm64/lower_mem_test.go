@@ -336,10 +336,59 @@ func TestMachine_collectAddends(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		setup  func(*mockCompiler, ssa.Builder, *machine) (ptr ssa.Value, verify func(t *testing.T))
-		exp32s []addend32
-		exp64s []regalloc.VReg
-		offset int64
+		exp32s     []addend32
+		exp64s     []regalloc.VReg
+		expShifted []addendShifted
+		offset     int64
 	}{
+		{
+			name: "i64 shift by constant 3",
+			setup: func(ctx *mockCompiler, b ssa.Builder, m *machine) (ptr ssa.Value, verify func(t *testing.T)) {
+				base := addParam(ctx, b, ssa.TypeI64)
+				amount := insertI64Const(ctx, b, 3)
+				shl := b.AllocateInstruction()
+				shl.AsIshl(base, amount.Return())
+				b.InsertInstruction(shl)
+				ctx.definitions[shl.Return()] = backend.SSAValueDefinition{Instr: shl, V: shl.Return()}
+				return shl.Return(), func(t *testing.T) {
+					require.True(t, shl.Lowered())
+				}
+			},
+			expShifted: []addendShifted{{r: v1000, ext: extendOpNone, shift: 3}},
+		},
+		{
+			name: "uextend followed by i64 shift by constant 2",
+			setup: func(ctx *mockCompiler, b ssa.Builder, m *machine) (ptr ssa.Value, verify func(t *testing.T)) {
+				idx32 := addParam(ctx, b, ssa.TypeI32)
+				ext := insertExt(ctx, b, idx32, 32, 64, false)
+				amount := insertI64Const(ctx, b, 2)
+				shl := b.AllocateInstruction()
+				shl.AsIshl(ext.Return(), amount.Return())
+				b.InsertInstruction(shl)
+				ctx.definitions[shl.Return()] = backend.SSAValueDefinition{Instr: shl, V: shl.Return()}
+				return shl.Return(), func(t *testing.T) {
+					require.True(t, shl.Lowered())
+					require.True(t, ext.Lowered())
+				}
+			},
+			expShifted: []addendShifted{{r: v1000, ext: extendOpUXTW, shift: 2}},
+		},
+		{
+			name: "i64 shift by too large constant",
+			setup: func(ctx *mockCompiler, b ssa.Builder, m *machine) (ptr ssa.Value, verify func(t *testing.T)) {
+				base := addParam(ctx, b, ssa.TypeI64)
+				amount := insertI64Const(ctx, b, 5)
+				shl := b.AllocateInstruction()
+				shl.AsIshl(base, amount.Return())
+				b.InsertInstruction(shl)
+				ctx.definitions[shl.Return()] = backend.SSAValueDefinition{Instr: shl, V: shl.Return()}
+				ctx.vRegMap[shl.Return()] = v2000
+				return shl.Return(), func(t *testing.T) {
+					require.False(t, shl.Lowered())
+				}
+			},
+			exp64s: []regalloc.VReg{v2000},
+		},
 		{
 			name: "non merged",
 			setup: func(ctx *mockCompiler, b ssa.Builder, m *machine) (ptr ssa.Value, verify func(t *testing.T)) {
@@ -458,9 +507,10 @@ func TestMachine_collectAddends(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, b, m := newSetupWithMockContext()
 			ptr, verify := tc.setup(ctx, b, m)
-			actual32sQ, actual64sQ, actualOffset := m.collectAddends(ptr)
+			actual32sQ, actual64sQ, actualShiftedQ, actualOffset := m.collectAddends(ptr)
 			require.Equal(t, tc.exp32s, actual32sQ.Data)
 			require.Equal(t, tc.exp64s, actual64sQ.Data)
+			require.Equal(t, tc.expShifted, actualShiftedQ.Data)
 			require.Equal(t, tc.offset, actualOffset)
 			verify(t)
 		})
@@ -562,11 +612,56 @@ func TestMachine_lowerToAddressModeFromAddends(t *testing.T) {
 		name          string
 		a32s          []addend32
 		a64s          []regalloc.VReg
+		aShifted      []addendShifted
 		dstSizeInBits byte
 		offset        int64
 		exp           addressMode
 		insts         []string
 	}{
+		{
+			name:          "one a64 and a matching shifted index",
+			a64s:          []regalloc.VReg{x1},
+			aShifted:      []addendShifted{{r: x2, ext: extendOpNone, shift: 3}},
+			dstSizeInBits: 64,
+			exp:           addressMode{kind: addressModeKindRegScaled, rn: x1, rm: x2, extOp: extendOpUXTX},
+		},
+		{
+			name:          "one a64 and a matching shifted+extended index",
+			a64s:          []regalloc.VReg{x1},
+			aShifted:      []addendShifted{{r: x2, ext: extendOpUXTW, shift: 2}},
+			dstSizeInBits: 32,
+			exp:           addressMode{kind: addressModeKindRegScaledExtended, rn: x1, rm: x2, extOp: extendOpUXTW},
+		},
+		{
+			name:          "matching shifted index without a64 base",
+			aShifted:      []addendShifted{{r: x2, ext: extendOpNone, shift: 3}},
+			offset:        8,
+			dstSizeInBits: 64,
+			insts:         []string{"orr x100?, xzr, #0x8"},
+			exp:           addressMode{kind: addressModeKindRegScaled, rn: nextVReg, rm: x2, extOp: extendOpUXTX},
+		},
+		{
+			name:          "mismatching shifted index materialized",
+			a64s:          []regalloc.VReg{x1},
+			aShifted:      []addendShifted{{r: x2, ext: extendOpNone, shift: 3}},
+			dstSizeInBits: 32,
+			insts: []string{
+				"lsl x100?, x2, 0x3",
+				"add x101?, x1, x100?",
+			},
+			exp: addressMode{kind: addressModeKindRegSignedImm9, rn: nextNextVeg, imm: 0},
+		},
+		{
+			name:          "matching and extra shifted index",
+			a64s:          []regalloc.VReg{x1},
+			aShifted:      []addendShifted{{r: x2, ext: extendOpNone, shift: 3}, {r: x3, ext: extendOpNone, shift: 3}},
+			dstSizeInBits: 64,
+			insts: []string{
+				"lsl x100?, x3, 0x3",
+				"add x101?, x1, x100?",
+			},
+			exp: addressMode{kind: addressModeKindRegScaled, rn: nextNextVeg, rm: x2, extOp: extendOpUXTX},
+		},
 		{
 			name:   "only offset",
 			offset: 4095,
@@ -800,13 +895,17 @@ func TestMachine_lowerToAddressModeFromAddends(t *testing.T) {
 
 			var a32s wazevoapi.Queue[addend32]
 			var a64s wazevoapi.Queue[regalloc.VReg]
+			var aShifted wazevoapi.Queue[addendShifted]
 			for _, a32 := range tc.a32s {
 				a32s.Enqueue(a32)
 			}
 			for _, a64 := range tc.a64s {
 				a64s.Enqueue(a64)
 			}
-			actual := m.lowerToAddressModeFromAddends(&a32s, &a64s, tc.dstSizeInBits, tc.offset)
+			for _, s := range tc.aShifted {
+				aShifted.Enqueue(s)
+			}
+			actual := m.lowerToAddressModeFromAddends(&a32s, &a64s, &aShifted, tc.dstSizeInBits, tc.offset)
 			require.Equal(t, strings.Join(tc.insts, "\n"), formatEmittedInstructionsInCurrentBlock(m))
 			require.Equal(t, &tc.exp, actual, actual.format(tc.dstSizeInBits))
 		})
