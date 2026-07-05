@@ -275,9 +275,14 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 	// (experimental.MemoryWithPreappliedData, e.g. a copy-on-write view of a
 	// previously initialized instance); bounds are still validated below and
 	// passive data instances still registered, only the copies are skipped.
+	// The skip is bound to the module identity, and refused when any active
+	// segment offset depends on an imported global: constant expressions may
+	// only global.get imported globals, so such a segment's placement depends
+	// on the import environment rather than on the module identity alone.
 	skipCopy := false
 	if mem := m.MemoryInstance; mem != nil && mem.expBuffer != nil && !mem.Shared {
-		if p, ok := mem.expBuffer.(experimental.MemoryWithPreappliedData); ok && p.PreappliedData() {
+		if p, ok := mem.expBuffer.(experimental.MemoryWithPreappliedData); ok &&
+			!m.hasImportDependentDataOffsets(data) && p.PreappliedDataFor(m.Source.ID) {
 			skipCopy = true
 		}
 	}
@@ -296,6 +301,36 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 		}
 	}
 	return nil
+}
+
+// hasImportDependentDataOffsets reports whether any active data segment's
+// offset expression reads a global. Constant expressions may only global.get
+// imported globals, so such an offset depends on the import environment.
+func (m *ModuleInstance) hasImportDependentDataOffsets(data []DataSegment) bool {
+	usesGlobal := false
+	for i := range data {
+		d := &data[i]
+		if d.IsPassive() {
+			continue
+		}
+		_, _, err := evaluateConstExpr(
+			&d.OffsetExpression,
+			func(globalIndex Index) (ValueType, uint64, uint64, error) {
+				usesGlobal = true
+				g := m.Globals[globalIndex]
+				return g.Type.ValType, g.Val, g.ValHi, nil
+			},
+			func(funcIndex Index) (Reference, error) {
+				return m.Engine.FunctionInstanceReference(funcIndex), nil
+			},
+		)
+		if err != nil || usesGlobal {
+			// On evaluation errors be conservative and refuse the skip; the
+			// main loop below will surface the problem as usual.
+			return true
+		}
+	}
+	return false
 }
 
 // GetExport returns an export of the given name and type or errs if not exported or the wrong type.

@@ -43,22 +43,31 @@ type LinearMemory interface {
 }
 
 // MemoryWithPreappliedData is an optional interface a LinearMemory may
-// implement to declare that its initial contents already include the
-// module's active data segments — for example a copy-on-write view of the
-// memory of a previously initialized instance of the same module. When it
+// implement to declare that its initial contents already include the active
+// data segments of a specific module — for example a copy-on-write view of
+// the memory of a previously initialized instance of that module. When it
 // returns true, instantiation skips copying active data segments into the
 // memory; active-segment bounds are still validated and passive data
 // instances are still registered.
 //
-// The host is responsible for the returned memory actually matching the
-// module's post-initialization state: mismatched contents change guest
-// semantics (though isolation between instances is unaffected, since
-// contents come only from the host-provided image). Shared memories are
-// not supported.
+// The moduleID passed to PreappliedDataFor is the SHA-256 of the module's
+// binary (the same identity the compilation cache is keyed on).
+// Implementations must record the ID of the module whose post-initialization
+// memory the image was built from, and return true only for that exact ID, so
+// that an image can never be applied to a different (e.g. updated) module.
+//
+// The skip is additionally refused by the runtime when any active data
+// segment offset depends on an imported global, since then the segment
+// placement is not determined by the module identity alone.
+//
+// A mismatched image changes guest semantics but does not affect isolation
+// between instances, since the contents come only from the host-provided
+// image. Shared memories are not supported.
 type MemoryWithPreappliedData interface {
-	// PreappliedData reports whether active data segments are already
-	// present in the memory returned by Reallocate.
-	PreappliedData() bool
+	// PreappliedDataFor reports whether the memory returned by Reallocate
+	// already contains the active data segments of the module identified by
+	// moduleID (SHA-256 of the module binary).
+	PreappliedDataFor(moduleID [32]byte) bool
 }
 
 // WithMemoryAllocator registers the given MemoryAllocator into the given

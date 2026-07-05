@@ -953,11 +953,15 @@ func TestModuleInstance_applyData(t *testing.T) {
 		require.EqualError(t, err, "data[0]: out of bounds memory access")
 	})
 	t.Run("pre-applied data skips copies but keeps validation", func(t *testing.T) {
+		imageID := ModuleID{1, 2, 3}
 		buf := make([]byte, 10)
-		m := &ModuleInstance{MemoryInstance: &MemoryInstance{
-			Buffer:    buf,
-			expBuffer: preappliedLinearMemory{buf: buf},
-		}}
+		m := &ModuleInstance{
+			Source: &Module{ID: imageID},
+			MemoryInstance: &MemoryInstance{
+				Buffer:    buf,
+				expBuffer: preappliedLinearMemory{buf: buf, forID: imageID},
+			},
+		}
 		err := m.applyData([]DataSegment{
 			{OffsetExpression: NewConstantExpressionFromI32(0), Init: []byte{0xa, 0xf}},
 		})
@@ -973,12 +977,45 @@ func TestModuleInstance_applyData(t *testing.T) {
 		})
 		require.EqualError(t, err, "data[0]: out of bounds memory access")
 
+		// An image built from a different module never skips.
+		otherModule := &ModuleInstance{
+			Source: &Module{ID: ModuleID{4, 5, 6}},
+			MemoryInstance: &MemoryInstance{
+				Buffer:    make([]byte, 10),
+				expBuffer: preappliedLinearMemory{buf: buf, forID: imageID},
+			},
+		}
+		err = otherModule.applyData([]DataSegment{
+			{OffsetExpression: NewConstantExpressionFromI32(0), Init: []byte{0xa, 0xf}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, []byte{0xa, 0xf}, otherModule.MemoryInstance.Buffer[:2])
+
+		// A segment whose offset depends on an (imported) global never skips:
+		// its placement is not determined by the module identity alone.
+		importedOffset := &ModuleInstance{
+			Source:  &Module{ID: imageID},
+			Globals: []*GlobalInstance{{Type: GlobalType{ValType: ValueTypeI32}, Val: 1}},
+			MemoryInstance: &MemoryInstance{
+				Buffer:    make([]byte, 10),
+				expBuffer: preappliedLinearMemory{buf: buf, forID: imageID},
+			},
+		}
+		err = importedOffset.applyData([]DataSegment{
+			{OffsetExpression: NewConstantExpressionFromOpcode(OpcodeGlobalGet, []byte{0}), Init: []byte{0xa, 0xf}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, []byte{0x0, 0xa, 0xf}, importedOffset.MemoryInstance.Buffer[:3])
+
 		// Shared memories never skip.
-		shared := &ModuleInstance{MemoryInstance: &MemoryInstance{
-			Buffer:    make([]byte, 10),
-			Shared:    true,
-			expBuffer: preappliedLinearMemory{buf: buf},
-		}}
+		shared := &ModuleInstance{
+			Source: &Module{ID: imageID},
+			MemoryInstance: &MemoryInstance{
+				Buffer:    make([]byte, 10),
+				Shared:    true,
+				expBuffer: preappliedLinearMemory{buf: buf, forID: imageID},
+			},
+		}
 		err = shared.applyData([]DataSegment{
 			{OffsetExpression: NewConstantExpressionFromI32(0), Init: []byte{0xa, 0xf}},
 		})
@@ -989,11 +1026,16 @@ func TestModuleInstance_applyData(t *testing.T) {
 
 // preappliedLinearMemory implements experimental.LinearMemory and
 // experimental.MemoryWithPreappliedData for applyData tests.
-type preappliedLinearMemory struct{ buf []byte }
+type preappliedLinearMemory struct {
+	buf   []byte
+	forID ModuleID
+}
 
 func (m preappliedLinearMemory) Reallocate(size uint64) []byte { return m.buf[:size] }
 func (m preappliedLinearMemory) Free()                         {}
-func (m preappliedLinearMemory) PreappliedData() bool          { return true }
+func (m preappliedLinearMemory) PreappliedDataFor(moduleID [32]byte) bool {
+	return moduleID == m.forID
+}
 
 func globalsContain(globals []*GlobalInstance, want *GlobalInstance) bool {
 	for _, f := range globals {
