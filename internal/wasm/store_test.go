@@ -1021,6 +1021,24 @@ func TestModuleInstance_applyData(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, []byte{0xa, 0xf}, shared.MemoryInstance.Buffer[:2])
+
+		// A module with a start section never skips: the start function runs on
+		// every instance, so an image captured post-start would double-apply
+		// the start's writes. The copy must happen even though the image ID
+		// matches (audit finding C2).
+		startFuncIdx := Index(0)
+		withStart := &ModuleInstance{
+			Source: &Module{ID: imageID, StartSection: &startFuncIdx},
+			MemoryInstance: &MemoryInstance{
+				Buffer:    make([]byte, 10),
+				expBuffer: preappliedLinearMemory{buf: buf, forID: imageID},
+			},
+		}
+		err = withStart.applyData([]DataSegment{
+			{OffsetExpression: NewConstantExpressionFromI32(0), Init: []byte{0xa, 0xf}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, []byte{0xa, 0xf}, withStart.MemoryInstance.Buffer[:2])
 	})
 }
 
