@@ -279,9 +279,18 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 	// segment offset depends on an imported global: constant expressions may
 	// only global.get imported globals, so such a segment's placement depends
 	// on the import environment rather than on the module identity alone.
+	//
+	// It is also refused when the module has a start section. A pre-applied
+	// image must be bit-identical to normal-instantiation memory at the point
+	// the copy would happen — after data segments, *before* the start function.
+	// The start function runs on every instance, so an image captured from an
+	// already-started instance has different contents (the start's writes are
+	// baked in and would then be applied a second time). Refusing the skip here
+	// keeps the feature safe-by-construction for start-free modules.
 	skipCopy := false
 	if mem := m.MemoryInstance; mem != nil && mem.expBuffer != nil && !mem.Shared {
 		if p, ok := mem.expBuffer.(experimental.MemoryWithPreappliedData); ok &&
+			m.Source.StartSection == nil &&
 			!m.hasImportDependentDataOffsets(data) && p.PreappliedDataFor(m.Source.ID) {
 			skipCopy = true
 		}
