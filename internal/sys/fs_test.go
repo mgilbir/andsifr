@@ -247,6 +247,17 @@ func TestFSContext_Renumber(t *testing.T) {
 
 		// Both are preopen.
 		require.Equal(t, sys.ENOTSUP, fsc.Renumber(3, 3))
+
+		// A target fd beyond the allocation cap is rejected instead of growing
+		// the descriptor table to a fatal size (audit finding U5). Use a fresh
+		// non-preopen source fd to isolate this from the preopen checks above.
+		fromFd, errno := fsc.OpenFile(dirFS, dirName, sys.O_RDONLY, 0)
+		require.EqualErrno(t, 0, errno)
+		require.Equal(t, sys.EBADF, fsc.Renumber(fromFd, 0x7FFFFFFF))
+		require.Equal(t, sys.EBADF, fsc.Renumber(fromFd, maxFileDescriptor+1))
+		// The rejected renumber must not have consumed the source fd.
+		_, ok = fsc.LookupFile(fromFd)
+		require.True(t, ok)
 	})
 }
 

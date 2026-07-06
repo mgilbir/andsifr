@@ -260,6 +260,16 @@ type FSContext struct {
 // descriptors to file entries.
 type FileTable = descriptor.Table[int32, *FileEntry]
 
+// maxFileDescriptor bounds the file-descriptor values a guest can force the
+// descriptor table to allocate storage for. fd_renumber takes a guest-supplied
+// target fd and grows the backing table to physically contain that index
+// (see internal/descriptor.Table.InsertAt), so an unbounded target such as
+// 0x7FFFFFFF would attempt to allocate ~17 GB of *FileEntry slots and fatally
+// OOM the host from a single guest call. This cap mirrors a generous
+// RLIMIT_NOFILE hard limit while keeping the worst-case table allocation small
+// (~8 MB of pointers).
+const maxFileDescriptor = 1 << 20
+
 // LookupFile returns a file if it is in the table.
 func (c *FSContext) LookupFile(fd int32) (*FileEntry, bool) {
 	return c.openedFiles.Lookup(fd)
@@ -288,7 +298,9 @@ func (c *FSContext) OpenFile(fs sys.FS, path string, flag sys.Oflag, perm fs.Fil
 // Renumber assigns the file pointed by the descriptor `from` to `to`.
 func (c *FSContext) Renumber(from, to int32) sys.Errno {
 	fromFile, ok := c.openedFiles.Lookup(from)
-	if !ok || to < 0 {
+	// A negative or absurdly large target fd is rejected before it can drive an
+	// unbounded table growth (see maxFileDescriptor).
+	if !ok || to < 0 || to > maxFileDescriptor {
 		return sys.EBADF
 	} else if fromFile.IsPreopen {
 		return sys.ENOTSUP
