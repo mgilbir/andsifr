@@ -291,7 +291,7 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 	if mem := m.MemoryInstance; mem != nil && mem.expBuffer != nil && !mem.Shared {
 		if p, ok := mem.expBuffer.(experimental.MemoryWithPreappliedData); ok &&
 			m.Source.StartSection == nil &&
-			!m.hasImportDependentDataOffsets(data) && p.PreappliedDataFor(m.Source.ID) {
+			!hasImportDependentDataOffsets(data) && p.PreappliedDataFor(m.Source.ID) {
 			skipCopy = true
 		}
 	}
@@ -315,27 +315,20 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 // hasImportDependentDataOffsets reports whether any active data segment's
 // offset expression reads a global. Constant expressions may only global.get
 // imported globals, so such an offset depends on the import environment.
-func (m *ModuleInstance) hasImportDependentDataOffsets(data []DataSegment) bool {
-	usesGlobal := false
+func hasImportDependentDataOffsets(data []DataSegment) bool {
 	for i := range data {
 		d := &data[i]
 		if d.IsPassive() {
 			continue
 		}
-		_, _, err := evaluateConstExpr(
-			&d.OffsetExpression,
-			func(globalIndex Index) (ValueType, uint64, uint64, error) {
-				usesGlobal = true
-				g := m.Globals[globalIndex]
-				return g.Type.ValType, g.Val, g.ValHi, nil
-			},
-			func(funcIndex Index) (Reference, error) {
-				return m.Engine.FunctionInstanceReference(funcIndex), nil
-			},
-		)
-		if err != nil || usesGlobal {
-			// On evaluation errors be conservative and refuse the skip; the
-			// main loop below will surface the problem as usual.
+		// Detect a global reference from the offset expression's opcodes alone,
+		// without evaluating it. Evaluating every active segment's offset here
+		// (in addition to the mandatory evaluation in the applyData loop below)
+		// doubled the constant-expression work on the skip path, which is the
+		// hot path this feature exists to accelerate. constExprReferencesGlobal
+		// also never dereferences a global, so an out-of-range global index in a
+		// malformed offset can no longer panic here.
+		if constExprReferencesGlobal(&d.OffsetExpression) {
 			return true
 		}
 	}
