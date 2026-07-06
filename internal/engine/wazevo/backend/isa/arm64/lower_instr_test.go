@@ -13,6 +13,90 @@ import (
 	"github.com/mgilbir/andsifr/internal/testing/require"
 )
 
+// TestMachine_LowerConditionalBranch_BandToFlag pins down the folding of
+// `br_if (icmp cond (band a b) 0)`. Folding the Band to a flag-setting ANDS is
+// only valid for eq/ne, which read solely the Z flag: ANDS forces C=0, so the
+// unsigned conditions (which read C) must fall back to a real SUBS
+// compare-against-zero (audit finding U17).
+func TestMachine_LowerConditionalBranch_BandToFlag(t *testing.T) {
+	buildBandVsZero := func(cond ssa.IntegerCmpCond) func(*mockCompiler, ssa.Builder, *machine) (*ssa.Instruction, func(*testing.T)) {
+		return func(ctx *mockCompiler, builder ssa.Builder, m *machine) (*ssa.Instruction, func(*testing.T)) {
+			entry := builder.CurrentBlock()
+			a := entry.AddParam(builder, ssa.TypeI64)
+			b := entry.AddParam(builder, ssa.TypeI64)
+			ctx.vRegMap[a] = regToVReg(x1).SetRegType(regalloc.RegTypeInt)
+			ctx.vRegMap[b] = regToVReg(x2).SetRegType(regalloc.RegTypeInt)
+			ctx.definitions[a] = backend.SSAValueDefinition{V: a}
+			ctx.definitions[b] = backend.SSAValueDefinition{V: b}
+
+			band := builder.AllocateInstruction()
+			band.AsBand(a, b)
+			builder.InsertInstruction(band)
+			bandVal := band.Return()
+			ctx.vRegMap[bandVal] = intToVReg(3)
+			ctx.definitions[bandVal] = backend.SSAValueDefinition{V: bandVal, Instr: band}
+
+			zero := builder.AllocateInstruction()
+			zero.AsIconst64(0)
+			builder.InsertInstruction(zero)
+			zeroVal := zero.Return()
+			ctx.vRegMap[zeroVal] = intToVReg(4)
+			ctx.definitions[zeroVal] = backend.SSAValueDefinition{V: zeroVal, Instr: zero}
+
+			icmp := builder.AllocateInstruction()
+			icmp.AsIcmp(bandVal, zeroVal, cond)
+			builder.InsertInstruction(icmp)
+			icmpVal := icmp.Return()
+			ctx.vRegMap[icmpVal] = intToVReg(5)
+			ctx.definitions[icmpVal] = backend.SSAValueDefinition{Instr: icmp}
+
+			br := builder.AllocateInstruction()
+			br.AsBrnz(icmpVal, ssa.ValuesNil, builder.AllocateBasicBlock())
+			builder.InsertInstruction(br)
+			return br, func(t *testing.T) { require.True(t, icmp.Lowered()) }
+		}
+	}
+
+	for _, tc := range []struct {
+		name         string
+		setup        func(*mockCompiler, ssa.Builder, *machine) (*ssa.Instruction, func(*testing.T))
+		instructions []string
+	}{
+		{
+			// eq reads only Z; folding the Band to ANDS is valid.
+			name:         "eq folds to ands",
+			setup:        buildBandVsZero(ssa.IntegerCmpCondEqual),
+			instructions: []string{"ands xzr, x1, x2", "b.eq L1"},
+		},
+		{
+			name:         "ne folds to ands",
+			setup:        buildBandVsZero(ssa.IntegerCmpCondNotEqual),
+			instructions: []string{"ands xzr, x1, x2", "b.ne L1"},
+		},
+		{
+			// gt_u reads C; ANDS forces C=0 so it must NOT fold — the Band result
+			// is compared with SUBS against zero (which sets C=1), and the branch
+			// is the correct b.hi. Before the fix this folded to
+			// `ands xzr, x1, x2; b.ls L1`, taking b.ls unconditionally (C==0).
+			name:  "unsigned-greater-than does not fold to ands",
+			setup: buildBandVsZero(ssa.IntegerCmpCondUnsignedGreaterThan),
+			instructions: []string{
+				"subs xzr, x3?, #0x0",
+				"b.hi L1",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, b, m := newSetupWithMockContext()
+			instr, verify := tc.setup(ctx, b, m)
+			m.LowerConditionalBranch(instr)
+			verify(t)
+			require.Equal(t, strings.Join(tc.instructions, "\n"),
+				formatEmittedInstructionsInCurrentBlock(m))
+		})
+	}
+}
+
 func TestMachine_LowerConditionalBranch(t *testing.T) {
 	cmpInSameGroupFromParams := func(
 		brz bool, intCond ssa.IntegerCmpCond, floatCond ssa.FloatCmpCond,

@@ -90,7 +90,7 @@ func (m *machine) LowerConditionalBranch(b *ssa.Instruction) {
 			cc = cc.invert()
 		}
 
-		if !m.tryLowerBandToFlag(x, y) {
+		if !m.tryLowerBandToFlag(x, y, c) {
 			m.lowerIcmpToFlag(x, y, signed)
 		}
 		cbr := m.allocateInstr()
@@ -123,7 +123,18 @@ func (m *machine) LowerConditionalBranch(b *ssa.Instruction) {
 	}
 }
 
-func (m *machine) tryLowerBandToFlag(x, y ssa.Value) (ok bool) {
+// tryLowerBandToFlag folds `Icmp <cond> (Band X Y), 0` (either operand order)
+// by lowering the Band to a flag-setting ANDS instead of materializing the
+// result and comparing it. On AArch64 ANDS forces C=0 and V=0, so the emitted
+// flags differ from the `SUBS rn, #0` a normal compare-against-zero would set
+// (which yields C=1). Only the eq/ne conditions read solely the Z flag and are
+// safe to fold; the unsigned conditions read C and would be miscompiled (audit
+// finding U17). Refuse the fold for anything but eq/ne and let the caller fall
+// back to SUBS.
+func (m *machine) tryLowerBandToFlag(x, y ssa.Value, c ssa.IntegerCmpCond) (ok bool) {
+	if c != ssa.IntegerCmpCondEqual && c != ssa.IntegerCmpCondNotEqual {
+		return false
+	}
 	xx := m.compiler.ValueDefinition(x)
 	yy := m.compiler.ValueDefinition(y)
 	if xx.IsFromInstr() && xx.Instr.Constant() && xx.Instr.ConstantVal() == 0 {
@@ -1983,7 +1994,7 @@ func (m *machine) lowerExitIfTrueWithCode(execCtxVReg regalloc.VReg, cond ssa.Va
 	x, y, c := cvalInstr.IcmpData()
 	signed := c.Signed()
 
-	if !m.tryLowerBandToFlag(x, y) {
+	if !m.tryLowerBandToFlag(x, y, c) {
 		m.lowerIcmpToFlag(x, y, signed)
 	}
 
@@ -2017,7 +2028,7 @@ func (m *machine) lowerExitIfTrueWithCodeShared(execCtxVReg regalloc.VReg, cond 
 	x, y, c := cvalInstr.IcmpData()
 	signed := c.Signed()
 
-	if !m.tryLowerBandToFlag(x, y) {
+	if !m.tryLowerBandToFlag(x, y, c) {
 		m.lowerIcmpToFlag(x, y, signed)
 	}
 
