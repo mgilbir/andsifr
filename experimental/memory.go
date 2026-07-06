@@ -57,7 +57,8 @@ type LinearMemory interface {
 // that an image can never be applied to a different (e.g. updated) module.
 //
 // The skip is additionally refused by the runtime when any active data
-// segment offset depends on an imported global, since then the segment
+// segment offset references a global (imported, or a module-local one whose
+// initializer transitively reads an imported global), since then the segment
 // placement is not determined by the module identity alone.
 //
 // A mismatched image changes guest semantics but does not affect isolation
