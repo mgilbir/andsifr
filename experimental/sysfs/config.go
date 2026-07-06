@@ -1,7 +1,7 @@
 package sysfs
 
 import (
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	experimentalsys "github.com/mgilbir/andsifr/experimental/sys"
 )
 

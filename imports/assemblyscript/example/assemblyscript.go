@@ -8,7 +8,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/imports/assemblyscript"
 )
 

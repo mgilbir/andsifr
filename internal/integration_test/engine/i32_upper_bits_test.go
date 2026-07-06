@@ -5,7 +5,7 @@ import (
 	_ "embed"
 	"testing"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/internal/platform"
 )
 

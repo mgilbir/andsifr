@@ -334,8 +334,8 @@ func TestMachine_collectAddends(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name   string
-		setup  func(*mockCompiler, ssa.Builder, *machine) (ptr ssa.Value, verify func(t *testing.T))
+		name       string
+		setup      func(*mockCompiler, ssa.Builder, *machine) (ptr ssa.Value, verify func(t *testing.T))
 		exp32s     []addend32
 		exp64s     []regalloc.VReg
 		expShifted []addendShifted

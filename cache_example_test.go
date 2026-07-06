@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 )
 
 // This is a basic example of using the file system compilation cache via wazero.NewCompilationCacheWithDir.

@@ -6,7 +6,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/api"
 	"github.com/mgilbir/andsifr/internal/testing/require"
 )

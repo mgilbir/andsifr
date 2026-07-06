@@ -33,7 +33,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/api"
 	experimentalsys "github.com/mgilbir/andsifr/experimental/sys"
 	. "github.com/mgilbir/andsifr/internal/assemblyscript"

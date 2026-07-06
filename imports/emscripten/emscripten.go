@@ -16,7 +16,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/api"
 	internal "github.com/mgilbir/andsifr/internal/emscripten"
 	"github.com/mgilbir/andsifr/internal/wasm"

@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/api"
 	"github.com/mgilbir/andsifr/imports/wasi_snapshot_preview1"
 	"github.com/mgilbir/andsifr/internal/platform"

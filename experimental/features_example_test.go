@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/api"
 	"github.com/mgilbir/andsifr/experimental"
 	"github.com/mgilbir/andsifr/imports/wasi_snapshot_preview1"

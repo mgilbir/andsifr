@@ -6,7 +6,7 @@ import (
 	_ "embed"
 	"testing"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/imports/wasi_snapshot_preview1"
 	"github.com/mgilbir/andsifr/internal/fstest"
 	"github.com/mgilbir/andsifr/internal/testing/require"
