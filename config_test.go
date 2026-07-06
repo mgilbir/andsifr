@@ -672,3 +672,31 @@ func TestNewRuntimeConfig(t *testing.T) {
 	// Ensures if the correct engine is selected.
 	require.Equal(t, engineKindAuto, c.engineKind)
 }
+
+// TestModuleConfig_WithEnv_siblingsDoNotAlias ensures that two configs forked
+// from the same base via WithEnv do not share their environ backing array. A
+// naive struct-copy clone lets the two appends write the same spare-capacity
+// slots, so one sibling's env silently overwrites the other's (audit finding
+// C3) — in a multi-tenant server, one tenant's env leaking into another's.
+func TestModuleConfig_WithEnv_siblingsDoNotAlias(t *testing.T) {
+	envPairs := func(c ModuleConfig) []string {
+		environ := c.(*moduleConfig).environ
+		out := make([]string, 0, len(environ)/2)
+		for i := 0; i+1 < len(environ); i += 2 {
+			out = append(out, string(environ[i])+"="+string(environ[i+1]))
+		}
+		return out
+	}
+
+	// Three appends leave the environ slice at len 6, cap 8 — spare capacity a
+	// shared backing array would let a fork write into.
+	base := NewModuleConfig().WithEnv("A", "1").WithEnv("B", "2").WithEnv("C", "3")
+
+	c1 := base.WithEnv("D", "4")
+	c2 := base.WithEnv("E", "5")
+
+	require.Equal(t, []string{"A=1", "B=2", "C=3", "D=4"}, envPairs(c1))
+	require.Equal(t, []string{"A=1", "B=2", "C=3", "E=5"}, envPairs(c2))
+	// The base is untouched by either fork.
+	require.Equal(t, []string{"A=1", "B=2", "C=3"}, envPairs(base))
+}

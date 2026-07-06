@@ -699,11 +699,16 @@ func NewModuleConfig() ModuleConfig {
 
 // clone makes a deep copy of this module config.
 func (c *moduleConfig) clone() *moduleConfig {
-	ret := *c // copy except maps which share a ref
+	ret := *c // copy except maps and slices which share a ref
 	ret.environKeys = make(map[string]int, len(c.environKeys))
 	for key, value := range c.environKeys {
 		ret.environKeys[key] = value
 	}
+	// Copy environ at exact len==cap so a later WithEnv append on the clone
+	// allocates a fresh backing array instead of writing into slots shared with
+	// the parent (which corrupts sibling configs forked from the same base).
+	ret.environ = make([][]byte, len(c.environ))
+	copy(ret.environ, c.environ)
 	return &ret
 }
 
