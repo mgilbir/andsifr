@@ -352,6 +352,11 @@ func (h hostModuleInstance) ExportedFunction(name string) api.Function {
 	panic("calling ExportedFunction is forbidden on host modules. See the note on ExportedFunction interface")
 }
 
+// UnwrapModuleInstance returns the wrapped module so an experimental
+// ImportResolver may return a host module (e.g. from Runtime.Module) without
+// tripping the *wasm.ModuleInstance type assertion in import resolution.
+func (h hostModuleInstance) UnwrapModuleInstance() api.Module { return h.Module }
+
 // Instantiate implements HostModuleBuilder.Instantiate
 func (b *hostModuleBuilder) Instantiate(ctx context.Context) (api.Module, error) {
 	if compiled, err := b.Compile(ctx); err != nil {

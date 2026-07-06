@@ -61,3 +61,46 @@ func TestImportResolver(t *testing.T) {
 		require.Equal(t, 1, callCount)
 	}
 }
+
+// TestImportResolver_HostModule ensures an ImportResolver may return a host
+// module (which the runtime hands back wrapped, not as a bare
+// *wasm.ModuleInstance) without panicking on the type assertion in import
+// resolution (audit finding C4).
+func TestImportResolver_HostModule(t *testing.T) {
+	ctx := context.Background()
+
+	r := wazero.NewRuntime(ctx)
+	defer r.Close(ctx)
+
+	var callCount int
+	start := func(context.Context) { callCount++ }
+	// Instantiate returns a wrapped host module (wazero.hostModuleInstance).
+	hostMod, err := r.NewHostModuleBuilder("host").
+		NewFunctionBuilder().WithFunc(start).Export("start").
+		Instantiate(ctx)
+	require.NoError(t, err)
+
+	resolveImport := func(name string) api.Module {
+		if name == "env" {
+			return hostMod // the wrapper, not a *wasm.ModuleInstance
+		}
+		return nil
+	}
+	ctx = experimental.WithImportResolver(ctx, resolveImport)
+
+	one := uint32(1)
+	binary := binaryencoding.EncodeModule(&wasm.Module{
+		TypeSection:     []wasm.FunctionType{{}},
+		ImportSection:   []wasm.Import{{Module: "env", Name: "start", Type: wasm.ExternTypeFunc, DescFunc: 0}},
+		FunctionSection: []wasm.Index{0},
+		CodeSection:     []wasm.Code{{Body: []byte{wasm.OpcodeCall, 0, wasm.OpcodeEnd}}},
+		StartSection:    &one,
+	})
+
+	modMain, err := r.CompileModule(ctx, binary)
+	require.NoError(t, err)
+
+	_, err = r.InstantiateModule(ctx, modMain, wazero.NewModuleConfig())
+	require.NoError(t, err)
+	require.Equal(t, 1, callCount)
+}

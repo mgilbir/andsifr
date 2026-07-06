@@ -478,7 +478,19 @@ func (m *ModuleInstance) resolveImports(ctx context.Context, module *Module) (er
 		var importedModule *ModuleInstance
 		if resolveImport != nil {
 			if v := resolveImport(moduleName); v != nil {
-				importedModule = v.(*ModuleInstance)
+				// A resolver may legitimately return a host module, which the
+				// runtime hands back wrapped (wazero.hostModuleInstance) rather
+				// than as a bare *ModuleInstance. Unwrap it via the exported
+				// accessor, then require a *ModuleInstance so an unexpected type
+				// returns an error instead of panicking on the type assertion.
+				if u, ok := v.(interface{ UnwrapModuleInstance() api.Module }); ok {
+					v = u.UnwrapModuleInstance()
+				}
+				mi, ok := v.(*ModuleInstance)
+				if !ok {
+					return fmt.Errorf("import resolver for module[%s] returned an unsupported module type %T", moduleName, v)
+				}
+				importedModule = mi
 			}
 		}
 		if importedModule == nil {
