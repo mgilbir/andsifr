@@ -626,6 +626,18 @@ func TestMachine_lowerToAddressModeFromAddends(t *testing.T) {
 			exp:           addressMode{kind: addressModeKindRegScaled, rn: x1, rm: x2, extOp: extendOpUXTX},
 		},
 		{
+			// A scaled-index amode has no immediate offset field, so a negative
+			// residual offset (e.g. p + i*8 - 8) must be folded into the base.
+			// Previously `offset > 0` dropped it, computing p + i*8 (audit C1).
+			name:          "one a64 and a matching shifted index with negative offset",
+			a64s:          []regalloc.VReg{x1},
+			aShifted:      []addendShifted{{r: x2, ext: extendOpNone, shift: 3}},
+			dstSizeInBits: 64,
+			offset:        -8,
+			insts:         []string{"sub x100?, x1, #0x8"},
+			exp:           addressMode{kind: addressModeKindRegScaled, rn: nextVReg, rm: x2, extOp: extendOpUXTX},
+		},
+		{
 			name:          "one a64 and a matching shifted+extended index",
 			a64s:          []regalloc.VReg{x1},
 			aShifted:      []addendShifted{{r: x2, ext: extendOpUXTW, shift: 2}},

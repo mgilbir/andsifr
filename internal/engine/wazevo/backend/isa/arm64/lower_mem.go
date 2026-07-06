@@ -327,7 +327,12 @@ func (m *machine) lowerToAddressModeFromAddends(a32s *wazevoapi.Queue[addend32],
 		}
 
 		baseReg := amode.rn
-		if offset > 0 {
+		// A scaled-index addressing mode has no immediate offset field, so any
+		// residual constant offset — of either sign — must be folded into the
+		// base register. Guarding on `offset > 0` silently dropped a negative
+		// residual (e.g. the `p + i*8 - 8` shape a compiler emits for
+		// &arr[i-1]), producing a wrong runtime address (audit finding C1).
+		if offset != 0 {
 			baseReg = m.addConstToReg64(baseReg, offset) // baseReg += offset
 		}
 		for !a64s.Empty() {
@@ -395,7 +400,10 @@ func (m *machine) lowerToAddressModeFromAddends(a32s *wazevoapi.Queue[addend32],
 	}
 
 	baseReg := amode.rn
-	if offset > 0 {
+	// As above: the RegExtended / RegReg fall-through amodes carry no immediate
+	// offset field, so a nonzero residual of either sign must be added into the
+	// base register (audit finding C1).
+	if offset != 0 {
 		baseReg = m.addConstToReg64(baseReg, offset) // baseReg += offset
 	}
 
