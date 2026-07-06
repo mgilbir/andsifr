@@ -596,6 +596,13 @@ func (m *Module) validateFunctionWithMaxStackValues(
 			// Validate each catch clause.
 			for i := uint32(0); i < catchCount; i++ {
 				pc++
+				// catchCount is an attacker-controlled LEB128 vector length read
+				// from the code body, so it may exceed the real number of clauses
+				// and drive pc past the end of body. Guard the direct index to
+				// return a validation error instead of panicking (host DoS).
+				if pc >= uint64(len(body)) {
+					return fmt.Errorf("unexpected end of function reading catch clause at pc=%#x", pc)
+				}
 				catchKind := body[pc]
 				switch catchKind {
 				case CatchKindCatch, CatchKindCatchRef:

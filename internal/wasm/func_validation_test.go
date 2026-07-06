@@ -4888,6 +4888,48 @@ func TestModule_funcValidation_Atomic(t *testing.T) {
 	})
 }
 
+// TestValidation_TryTable_TruncatedCatchClause ensures that a try_table whose
+// LEB128 catch-clause count exceeds the bytes actually present in the code body
+// is rejected with a validation error rather than panicking with an out-of-range
+// index (a host DoS reachable from CompileModule; audit finding U1).
+func TestValidation_TryTable_TruncatedCatchClause(t *testing.T) {
+	features := api.CoreFeaturesV2 | experimental.CoreFeaturesExceptionHandling
+
+	t.Run("count with no clause bytes", func(t *testing.T) {
+		// try_table (void) catchCount=1, then the body ends: the loop reads the
+		// first clause's kind byte past the end of the body.
+		body := []byte{OpcodeTryTable, 0x40 /* void block type */, 0x01 /* catchCount */}
+		m := &Module{
+			TypeSection:     []FunctionType{v_v},
+			FunctionSection: []Index{0},
+			CodeSection:     []Code{{Body: body}},
+		}
+		err := m.validateFunction(&stacks{}, features,
+			0, []Index{0}, nil, nil, nil, nil, nil, bytes.NewReader(nil))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "catch clause")
+	})
+
+	t.Run("count overruns after a valid clause", func(t *testing.T) {
+		// A valid catch_all clause (kind=0x02, label=0) followed by a claimed
+		// second clause that isn't present in the body.
+		body := []byte{
+			OpcodeTryTable, 0x40 /* void */, 0x02, /* catchCount=2 */
+			CatchKindCatchAll, 0x00, /* clause 0: catch_all -> label 0 */
+			// clause 1 is missing.
+		}
+		m := &Module{
+			TypeSection:     []FunctionType{v_v},
+			FunctionSection: []Index{0},
+			CodeSection:     []Code{{Body: body}},
+		}
+		err := m.validateFunction(&stacks{}, features,
+			0, []Index{0}, nil, nil, nil, nil, nil, bytes.NewReader(nil))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "catch clause")
+	})
+}
+
 func TestValidation_LegacyExceptionHandlingOpcodes(t *testing.T) {
 	for _, tc := range []struct {
 		opcode byte
