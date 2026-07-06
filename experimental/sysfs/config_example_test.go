@@ -4,7 +4,7 @@ import (
 	"io/fs"
 	"testing/fstest"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/experimental/sysfs"
 )
 

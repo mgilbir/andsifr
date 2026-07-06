@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/api"
 	experimentalsys "github.com/mgilbir/andsifr/experimental/sys"
 	"github.com/mgilbir/andsifr/imports/wasi_snapshot_preview1"

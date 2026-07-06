@@ -17,7 +17,7 @@ import (
 	gofstest "testing/fstest"
 	"time"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/api"
 	experimentalsock "github.com/mgilbir/andsifr/experimental/sock"
 	experimentalsys "github.com/mgilbir/andsifr/experimental/sys"

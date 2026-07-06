@@ -9,7 +9,7 @@ import (
 	"log"
 	"strconv"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/imports/wasi_snapshot_preview1"
 )
 

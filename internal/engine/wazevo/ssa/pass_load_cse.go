@@ -68,8 +68,7 @@ func passRedundantLoadEliminationOpt(b *builder) {
 				if op == OpcodeStore {
 					// A full-width store makes the stored value available to
 					// subsequent same-typed loads from the same address.
-					cache[loadCSEKey{root: root, offset: storeOff, typ: value.Type(), op: OpcodeLoad}] =
-						loadCSEEntry{v: value, sizeInBytes: storeSize}
+					cache[loadCSEKey{root: root, offset: storeOff, typ: value.Type(), op: OpcodeLoad}] = loadCSEEntry{v: value, sizeInBytes: storeSize}
 				}
 			case OpcodeCall, OpcodeCallIndirect,
 				OpcodeAtomicRmw, OpcodeAtomicCas, OpcodeAtomicLoad, OpcodeAtomicStore, OpcodeFence:

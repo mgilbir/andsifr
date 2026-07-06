@@ -3,7 +3,7 @@ package wasi_snapshot_preview1_test
 import (
 	"testing"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/internal/testing/require"
 	"github.com/mgilbir/andsifr/internal/wasip1"
 	"github.com/mgilbir/andsifr/sys"

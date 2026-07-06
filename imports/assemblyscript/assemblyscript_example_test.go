@@ -4,7 +4,7 @@ import (
 	"context"
 	_ "embed"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/imports/assemblyscript"
 )
 

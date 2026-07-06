@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/api"
 )
 

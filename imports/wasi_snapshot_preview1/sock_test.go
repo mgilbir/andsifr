@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mgilbir/andsifr"
+	wazero "github.com/mgilbir/andsifr"
 	"github.com/mgilbir/andsifr/api"
 	experimentalsock "github.com/mgilbir/andsifr/experimental/sock"
 	"github.com/mgilbir/andsifr/internal/sys"

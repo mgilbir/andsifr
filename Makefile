@@ -269,7 +269,7 @@ lint: $(golangci_lint_path)
 .PHONY: format
 format:
 	@go run $(gofumpt) -l -w .
-	@go run $(gosimports) -local github.com/tetratelabs/ -w $(shell find . -name '*.go' -type f)
+	@go run $(gosimports) -local github.com/mgilbir/ -w $(shell find . -name '*.go' -type f)
 	@go run $(asmfmt) -w $(shell find . -name '*.s' -type f)
 
 .PHONY: check  # Pre-flight check for pull requests
