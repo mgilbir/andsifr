@@ -276,9 +276,12 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 	// previously initialized instance); bounds are still validated below and
 	// passive data instances still registered, only the copies are skipped.
 	// The skip is bound to the module identity, and refused when any active
-	// segment offset depends on an imported global: constant expressions may
-	// only global.get imported globals, so such a segment's placement depends
-	// on the import environment rather than on the module identity alone.
+	// segment offset references a global. An offset that global.gets an imported
+	// global depends on the import environment rather than on the module
+	// identity alone; and under CoreFeaturesExtendedConst an offset may
+	// global.get a module-local global whose own initializer transitively
+	// global.gets an imported one, so any global reference (not only a directly
+	// imported one) is treated as import-dependent.
 	//
 	// It is also refused when the module has a start section. A pre-applied
 	// image must be bit-identical to normal-instantiation memory at the point
@@ -291,7 +294,7 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 	if mem := m.MemoryInstance; mem != nil && mem.expBuffer != nil && !mem.Shared {
 		if p, ok := mem.expBuffer.(experimental.MemoryWithPreappliedData); ok &&
 			m.Source.StartSection == nil &&
-			!hasImportDependentDataOffsets(data) && p.PreappliedDataFor(m.Source.ID) {
+			!hasGlobalDependentDataOffsets(data) && p.PreappliedDataFor(m.Source.ID) {
 			skipCopy = true
 		}
 	}
@@ -312,10 +315,13 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 	return nil
 }
 
-// hasImportDependentDataOffsets reports whether any active data segment's
-// offset expression reads a global. Constant expressions may only global.get
-// imported globals, so such an offset depends on the import environment.
-func hasImportDependentDataOffsets(data []DataSegment) bool {
+// hasGlobalDependentDataOffsets reports whether any active data segment's offset
+// expression references a global. Such an offset's placement can depend on the
+// import environment (directly, or transitively through a module-local global
+// initialized from an imported one under CoreFeaturesExtendedConst), so it is
+// not determined by the module identity alone and must disable the pre-applied
+// copy-skip.
+func hasGlobalDependentDataOffsets(data []DataSegment) bool {
 	for i := range data {
 		d := &data[i]
 		if d.IsPassive() {
