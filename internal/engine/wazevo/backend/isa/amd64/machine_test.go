@@ -452,3 +452,62 @@ L2:
 		})
 	}
 }
+
+// TestMachine_LowerConditionalBranch_BandToFlag pins down the Icmp(Band, 0)
+// -> single TEST fold. TEST sets SF/ZF/PF from a&b and clears CF/OF, i.e. it
+// produces the flags of `(a&b) CMP 0` with the band result as the *left*
+// operand. That only matches the IR when the constant 0 is the *right* operand
+// (const-on-right). Folding the commuted form Icmp(0, Band) to the same TEST
+// and applying the condition unchanged inverts every ordering comparison
+// (audit finding U16), so that form must fall back to a real compare.
+func TestMachine_tryLowerBandToFlag(t *testing.T) {
+	// build sets up a (a & b) Band and a constant 0, returning their value
+	// definitions so the caller can pass them to tryLowerBandToFlag in either
+	// operand order.
+	build := func(ctx *mockCompiler, builder ssa.Builder) (bandDef, zeroDef backend.SSAValueDefinition) {
+		intVReg := func(n int) regalloc.VReg { return regalloc.VReg(n).SetRegType(regalloc.RegTypeInt) }
+		entry := builder.CurrentBlock()
+		a := entry.AddParam(builder, ssa.TypeI64)
+		b := entry.AddParam(builder, ssa.TypeI64)
+		ctx.vRegMap[a], ctx.vRegMap[b] = intVReg(1), intVReg(2)
+		ctx.definitions[a] = backend.SSAValueDefinition{V: a}
+		ctx.definitions[b] = backend.SSAValueDefinition{V: b}
+
+		band := builder.AllocateInstruction()
+		band.AsBand(a, b)
+		builder.InsertInstruction(band)
+		bandVal := band.Return()
+		ctx.vRegMap[bandVal] = intVReg(3)
+		bandDef = backend.SSAValueDefinition{Instr: band}
+		ctx.definitions[bandVal] = bandDef
+
+		zero := builder.AllocateInstruction()
+		zero.AsIconst64(0)
+		builder.InsertInstruction(zero)
+		zeroVal := zero.Return()
+		ctx.vRegMap[zeroVal] = intVReg(4)
+		zeroDef = backend.SSAValueDefinition{Instr: zero}
+		ctx.definitions[zeroVal] = zeroDef
+		return
+	}
+
+	t.Run("const-on-right folds to test", func(t *testing.T) {
+		// Icmp(Band(a,b), 0): TEST computes the flags of `(a&b) CMP 0`, which
+		// matches the IR, so the fold is valid for every condition.
+		ctx, b, m := newSetupWithMockContext()
+		bandDef, zeroDef := build(ctx, b)
+		require.True(t, m.tryLowerBandToFlag(bandDef, zeroDef))
+		require.Equal(t, "testq %r2?, %r1?", formatEmittedInstructionsInCurrentBlock(m))
+	})
+
+	t.Run("const-on-left is not folded", func(t *testing.T) {
+		// Icmp(0, Band(a,b)) means `0 CMP (a&b)`; folding it to the same TEST and
+		// applying the condition unchanged inverts every ordering comparison
+		// (audit finding U16). The fold must be refused so the caller emits a
+		// real compare instead.
+		ctx, b, m := newSetupWithMockContext()
+		bandDef, zeroDef := build(ctx, b)
+		require.False(t, m.tryLowerBandToFlag(zeroDef, bandDef))
+		require.Equal(t, "", formatEmittedInstructionsInCurrentBlock(m))
+	})
+}

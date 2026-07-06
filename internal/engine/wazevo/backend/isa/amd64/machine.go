@@ -1683,15 +1683,19 @@ func (m *machine) lowerExitIfTrueWithCodeShared(execCtx regalloc.VReg, cond ssa.
 }
 
 func (m *machine) tryLowerBandToFlag(x, y backend.SSAValueDefinition) (ok bool) {
+	// Fold Icmp(Band(a,b), 0) to a single `TEST a,b`. TEST sets SF/ZF/PF from
+	// a&b and clears CF/OF, i.e. it produces exactly the flags of `(a&b) CMP 0`
+	// — the band result as the *left* comparison operand. That matches the IR
+	// only when the constant 0 is the *right* operand.
+	//
+	// The commuted form Icmp(0, Band(a,b)) means `0 CMP (a&b)`, whose correct
+	// flags come from `0 - (a&b)` — the opposite operand order. Folding it to
+	// the same TEST and applying the condition unchanged inverts every ordering
+	// comparison (lt/gt/le/ge, signed or unsigned); only eq/ne stay correct.
+	// So we intentionally do NOT match the const-on-left form here and let it
+	// fall back to a normal compare.
 	var target backend.SSAValueDefinition
 	var got bool
-	if x.IsFromInstr() && x.Instr.Constant() && x.Instr.ConstantVal() == 0 {
-		if m.c.MatchInstr(y, ssa.OpcodeBand) {
-			target = y
-			got = true
-		}
-	}
-
 	if y.IsFromInstr() && y.Instr.Constant() && y.Instr.ConstantVal() == 0 {
 		if m.c.MatchInstr(x, ssa.OpcodeBand) {
 			target = x
