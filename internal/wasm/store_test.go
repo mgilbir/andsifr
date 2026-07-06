@@ -888,7 +888,51 @@ func Test_resolveImports(t *testing.T) {
 			require.EqualError(t, err, "import memory[test.target]: maximum size mismatch: 10 < 65536")
 		})
 	})
+	t.Run("import resolver", func(t *testing.T) {
+		// A resolver returning a module type that is neither a *ModuleInstance
+		// nor an unwrappable wrapper must error, not panic (audit finding C4).
+		t.Run("unsupported type errors instead of panicking", func(t *testing.T) {
+			m := &ModuleInstance{s: newStore()}
+			ctx := experimental.WithImportResolver(context.Background(),
+				func(string) api.Module { return unsupportedAPIModule{} })
+			err := m.resolveImports(ctx, &Module{ImportPerModule: map[string][]*Import{moduleName: {{Name: name}}}})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "unsupported module type")
+		})
+		// A wrapper exposing UnwrapModuleInstance (as wazero.hostModuleInstance
+		// does for host modules) is unwrapped to the underlying *ModuleInstance.
+		t.Run("host-module wrapper is unwrapped", func(t *testing.T) {
+			g := &GlobalInstance{Type: GlobalType{ValType: ValueTypeI32}}
+			inner := &ModuleInstance{
+				Globals:    []*GlobalInstance{g},
+				Exports:    map[string]*Export{name: {Type: ExternTypeGlobal, Index: 0}},
+				ModuleName: moduleName,
+			}
+			m := &ModuleInstance{Globals: make([]*GlobalInstance, 1), s: newStore()}
+			ctx := experimental.WithImportResolver(context.Background(),
+				func(string) api.Module { return unwrappableModule{inner: inner} })
+			err := m.resolveImports(ctx, &Module{
+				ImportPerModule: map[string][]*Import{moduleName: {{Name: name, Type: ExternTypeGlobal, DescGlobal: g.Type}}},
+			})
+			require.NoError(t, err)
+			require.True(t, globalsContain(m.Globals, g))
+		})
+	})
 }
+
+// unsupportedAPIModule is an api.Module implementation that is not a
+// *wasm.ModuleInstance and does not expose UnwrapModuleInstance.
+type unsupportedAPIModule struct{ api.Module }
+
+// unwrappableModule mimics wazero.hostModuleInstance: it wraps an api.Module and
+// exposes it via UnwrapModuleInstance so import resolution can recover the
+// underlying *ModuleInstance.
+type unwrappableModule struct {
+	api.Module
+	inner *ModuleInstance
+}
+
+func (u unwrappableModule) UnwrapModuleInstance() api.Module { return u.inner }
 
 func TestModuleInstance_validateData(t *testing.T) {
 	m := &ModuleInstance{MemoryInstance: &MemoryInstance{Buffer: make([]byte, 5)}}
