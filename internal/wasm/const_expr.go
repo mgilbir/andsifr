@@ -223,6 +223,56 @@ func evaluateConstExpr(e *ConstantExpression, globalResolver func(globalIndex In
 	}
 }
 
+// constExprReferencesGlobal reports whether the constant expression contains a
+// global.get. It walks the opcodes advancing past their immediates but does not
+// evaluate them: no arithmetic, no stack, and — crucially — no dereference of
+// any global (so it cannot panic on an out-of-range global index the way a full
+// evaluateConstExpr pass can).
+//
+// It is deliberately fail-safe: any opcode it does not recognize, or a
+// truncated immediate, is reported as "references a global" so that callers
+// which use this to decide whether an operation is import-environment-dependent
+// stay conservative. It reports on ANY global.get, imported or module-local:
+// under CoreFeaturesExtendedConst an expression may global.get a module-local
+// global whose own initializer transitively global.gets an imported one, so a
+// local-vs-imported distinction would not be sufficient to prove
+// import-independence.
+func constExprReferencesGlobal(e *ConstantExpression) bool {
+	data := e.Data
+	for pc := 0; pc < len(data); {
+		op := data[pc]
+		pc++
+		switch op {
+		case OpcodeGlobalGet:
+			return true
+		case OpcodeEnd:
+			return false
+		case OpcodeI32Const:
+			_, n, err := leb128.LoadInt32(data[pc:])
+			if err != nil {
+				return true
+			}
+			pc += int(n)
+		case OpcodeI64Const:
+			_, n, err := leb128.LoadInt64(data[pc:])
+			if err != nil {
+				return true
+			}
+			pc += int(n)
+		case OpcodeI32Add, OpcodeI32Sub, OpcodeI32Mul,
+			OpcodeI64Add, OpcodeI64Sub, OpcodeI64Mul:
+			// No immediate operands.
+		default:
+			// Any other opcode (float/vector/reference const forms, or an
+			// unknown one) is not a valid integer offset expression component.
+			// Fail safe.
+			return true
+		}
+	}
+	// Ran off the end without an explicit OpcodeEnd: malformed. Fail safe.
+	return true
+}
+
 func evaluateConstExprInModuleInstance(e *ConstantExpression, m *ModuleInstance) []uint64 {
 	v, _, _ := evaluateConstExpr(
 		e,

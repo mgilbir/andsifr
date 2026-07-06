@@ -1051,6 +1051,26 @@ func TestModuleInstance_applyData(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []byte{0x0, 0xa, 0xf}, importedOffset.MemoryInstance.Buffer[:3])
 
+		// A non-global extended-const arithmetic offset still skips: the offset
+		// is fixed by the module identity, so the pre-applied image is valid.
+		// The opcode walk must not mistake the arithmetic for a global reference.
+		arithmeticOffset := &ModuleInstance{
+			Source: &Module{ID: imageID},
+			MemoryInstance: &MemoryInstance{
+				Buffer:    make([]byte, 10),
+				expBuffer: preappliedLinearMemory{buf: buf, forID: imageID},
+			},
+		}
+		err = arithmeticOffset.applyData([]DataSegment{
+			// i32.const 4; i32.const 4; i32.sub == offset 0, no global.
+			{OffsetExpression: ConstantExpression{Data: []byte{
+				OpcodeI32Const, 0x04, OpcodeI32Const, 0x04, OpcodeI32Sub, OpcodeEnd,
+			}}, Init: []byte{0xa, 0xf}},
+		})
+		require.NoError(t, err)
+		// Copy skipped: buffer untouched.
+		require.Equal(t, make([]byte, 10), arithmeticOffset.MemoryInstance.Buffer)
+
 		// Shared memories never skip.
 		shared := &ModuleInstance{
 			Source: &Module{ID: imageID},
