@@ -280,6 +280,10 @@ func (c *callEngine) callWithStack(ctx context.Context, paramResultStack []uint6
 	p := c.parent
 	ensureTermination := p.parent.ensureTermination
 	m := p.module
+	if !m.BeginExecution() {
+		return m.FailIfClosed()
+	}
+	defer m.EndExecution()
 	if ensureTermination {
 		select {
 		case <-ctx.Done():
@@ -351,11 +355,18 @@ func (c *callEngine) callWithStack(ctx context.Context, paramResultStack []uint6
 	}()
 
 	if ensureTermination {
-		c.execCtx.entryModuleClosedPtr = &m.Closed
 		c.execCtx.terminationCheckCounter = terminationCheckInterval
 		done := m.CloseModuleOnCanceledOrTimeout(ctx)
 		defer done()
 	}
+
+	// Always point the execution context at the entry module's Closed flag:
+	// compiled code dereferences it at loop headers whenever *that code's*
+	// module was compiled with ensureTermination, even if this entry module
+	// was not (e.g. a cross-Runtime call through an ImportResolver). Leaving
+	// it nil in that case would crash the host (C6 in
+	// codebase-audit-2026-10-18.md).
+	c.execCtx.entryModuleClosedPtr = &m.Closed
 
 	if c.stackTop&(16-1) != 0 {
 		panic("BUG: stack must be aligned to 16 bytes")
@@ -598,10 +609,18 @@ func (c *callEngine) callWithStack(ctx context.Context, paramResultStack []uint6
 			tagIndex := int(s[0])
 			mod := c.callerModuleInstance()
 			tag := mod.Tags[tagIndex]
-			nParams := len(tag.Type.Params)
-			exn := &wasm.Exception{Tag: tag, Params: make([]uint64, nParams)}
+			// v128 params occupy two uint64 slots each (see ExceptionParamSlots):
+			// sizing by parameter count overflowed the Go heap when compiled code
+			// stored a 16-byte v128 param (C14 in codebase-audit-2026-10-18.md).
+			nSlots := wasm.ExceptionParamSlots(tag.Type.Params)
+			exn := &wasm.Exception{Tag: tag, Params: make([]uint64, nSlots)}
+			// Root the exception in the store: guest code may hold this exnref
+			// (in locals, tables or globals) as a raw pointer the Go GC cannot
+			// see; without a root it could be collected and throw_ref would read
+			// freed memory (C15 in codebase-audit-2026-10-18.md).
+			mod.KeepExceptionAlive(exn)
 			c.pendingException = exn // GC root: keeps exn alive while compiled code writes params
-			if nParams > 0 {
+			if nSlots > 0 {
 				c.execCtx.exceptionParamsPtr = uintptr(unsafe.Pointer(&exn.Params[0]))
 			}
 			// Return the exnref to compiled code via the stack slot.

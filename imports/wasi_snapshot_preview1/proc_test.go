@@ -10,9 +10,6 @@ import (
 )
 
 func Test_procExit(t *testing.T) {
-	mod, r, log := requireProxyModule(t, wazero.NewModuleConfig())
-	defer r.Close(testCtx)
-
 	tests := []struct {
 		name        string
 		exitCode    uint32
@@ -38,7 +35,11 @@ func Test_procExit(t *testing.T) {
 		tc := tt
 
 		t.Run(tc.name, func(t *testing.T) {
-			defer log.Reset()
+			// Each subtest needs its own module: proc_exit closes it, and a call
+			// on an already-closed module is rejected with that module's exit
+			// code instead of executing.
+			mod, r, log := requireProxyModule(t, wazero.NewModuleConfig())
+			defer r.Close(testCtx)
 
 			// Since procExit panics, any opcodes afterwards cannot be reached.
 			_, err := mod.ExportedFunction(wasip1.ProcExitName).Call(testCtx, uint64(tc.exitCode))

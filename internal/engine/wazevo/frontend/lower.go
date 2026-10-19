@@ -1,6 +1,7 @@
 package frontend
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -1122,6 +1123,19 @@ func (c *Compiler) lowerCurrentOpcode() {
 	case wasm.OpcodeSelect, wasm.OpcodeTypedSelect:
 		if op == wasm.OpcodeTypedSelect {
 			state.pc += 2 // ignores the type which is only needed during validation.
+			// If the value type is a concrete reference type, the heap type is a signed
+			// LEB128 which can span multiple bytes. Validation skipped all of its bytes
+			// (see internal/wasm/func_validation.go); skip the remainder here so the
+			// engine consumes exactly the bytes validation saw.
+			if b := c.wasmFunctionBody[state.pc-1]; b == wasm.RefPrefixNullable || b == wasm.RefPrefixNonNullable {
+				_, num, err := leb128.DecodeInt33AsInt64(bytes.NewReader(c.wasmFunctionBody[state.pc:]))
+				if err != nil {
+					// In normal conditions this should never happen because the function
+					// has passed validation.
+					panic(fmt.Sprintf("failed to read heap type for typed select: %v", err))
+				}
+				state.pc += int(num)
+			}
 		}
 
 		if state.unreachable {
@@ -1366,76 +1380,7 @@ func (c *Compiler) lowerCurrentOpcode() {
 		c.switchTo(originalLen, loopHeader)
 
 		if c.ensureTermination {
-			// Termination check without a per-iteration Go call: load the entry
-			// module's Closed value through the pointer stored in the execution
-			// context so that a close (e.g. context cancellation/timeout) is
-			// observed promptly, and decrement a countdown so that the
-			// check-module-exit-code trampoline is still invoked every
-			// terminationCheckInterval iterations. The trampoline call is a Go
-			// scheduler yield point; without it, tight Wasm loops occupying every
-			// P would starve the goroutine that watches the context and sets
-			// Closed, and termination would never be observed. The hot path is
-			// two loads, a counter update, and one fall-through branch.
-			closedPtr := builder.AllocateInstruction().
-				AsLoad(c.execCtxPtrValue,
-					wazevoapi.ExecutionContextOffsetEntryModuleClosedPtr.U32(),
-					ssa.TypeI64,
-				).Insert(builder).Return()
-			closed := builder.AllocateInstruction().
-				AsLoad(closedPtr, 0, ssa.TypeI64).Insert(builder).Return()
-			zero := builder.AllocateInstruction().AsIconst64(0).Insert(builder)
-			checkClosed := builder.AllocateInstruction().
-				AsIcmp(closed, zero.Return(), ssa.IntegerCmpCondNotEqual).
-				Insert(builder).Return()
-			cnt := builder.AllocateInstruction().
-				AsLoad(c.execCtxPtrValue,
-					wazevoapi.ExecutionContextOffsetTerminationCheckCounter.U32(),
-					ssa.TypeI64,
-				).Insert(builder).Return()
-			one := builder.AllocateInstruction().AsIconst64(1).Insert(builder)
-			cntMinusOne := builder.AllocateInstruction().
-				AsIsub(cnt, one.Return()).Insert(builder).Return()
-			builder.AllocateInstruction().
-				AsStore(ssa.OpcodeStore, cntMinusOne, c.execCtxPtrValue,
-					wazevoapi.ExecutionContextOffsetTerminationCheckCounter.U32()).
-				Insert(builder)
-			// Signed <= 0 so that an uninitialized (zero) counter also takes the
-			// slow path immediately instead of wrapping around.
-			checkCounter := builder.AllocateInstruction().
-				AsIcmp(cntMinusOne, zero.Return(), ssa.IntegerCmpCondSignedLessThanOrEqual).
-				Insert(builder).Return()
-			condInstr := builder.AllocateInstruction()
-			condInstr.AsBor(checkClosed, checkCounter)
-			cond := condInstr.Insert(builder).Return()
-
-			// The slow path calls the check-module-exit-code trampoline, which
-			// fails the invocation if the module is closed and otherwise resets
-			// the countdown and resumes execution.
-			slowBlk, contBlk := builder.AllocateBasicBlock(), builder.AllocateBasicBlock()
-			brnz := builder.AllocateInstruction()
-			brnz.AsBrnz(cond, ssa.ValuesNil, slowBlk)
-			builder.InsertInstruction(brnz)
-			br := builder.AllocateInstruction()
-			br.AsJump(ssa.ValuesNil, contBlk)
-			builder.InsertInstruction(br)
-
-			builder.SetCurrentBlock(slowBlk)
-			builder.Seal(slowBlk)
-			checkModuleExitCodePtr := builder.AllocateInstruction().
-				AsLoad(c.execCtxPtrValue,
-					wazevoapi.ExecutionContextOffsetCheckModuleExitCodeTrampolineAddress.U32(),
-					ssa.TypeI64,
-				).Insert(builder).Return()
-			args := c.allocateVarLengthValues(1, c.execCtxPtrValue)
-			builder.AllocateInstruction().
-				AsCallIndirect(checkModuleExitCodePtr, &c.checkModuleExitCodeSig, args).
-				Insert(builder)
-			brBack := builder.AllocateInstruction()
-			brBack.AsJump(ssa.ValuesNil, contBlk)
-			builder.InsertInstruction(brBack)
-
-			builder.SetCurrentBlock(contBlk)
-			builder.Seal(contBlk)
+			c.lowerTerminationCheck()
 		}
 	case wasm.OpcodeIf:
 		bt := c.readBlockType()
@@ -3564,23 +3509,35 @@ func (c *Compiler) lowerCurrentOpcode() {
 		c.reloadAfterCall()
 
 		// We can now store each param directly into Exception.Params using the pointer
-		// stored into execCtx.exceptionParamsPtr.
+		// stored into execCtx.exceptionParamsPtr. Params are slot-packed: one
+		// uint64 slot per scalar param, two per v128 param (C14 in
+		// codebase-audit-2026-10-18.md).
 		if len(throwParams) > 0 {
 			paramsPtr := builder.AllocateInstruction().
 				AsLoad(c.execCtxPtrValue,
 					wazevoapi.ExecutionContextOffsetExceptionParamsPtr.U32(),
 					ssa.TypeI64,
 				).Insert(builder).Return()
-			for i, v := range throwParams {
+			slot := 0
+			for _, v := range throwParams {
+				offset := uint32(slot) * 8
 				switch v.Type() {
 				case ssa.TypeF32:
 					v = builder.AllocateInstruction().AsBitcast(v, ssa.TypeI32).Insert(builder).Return()
 				case ssa.TypeF64:
 					v = builder.AllocateInstruction().AsBitcast(v, ssa.TypeI64).Insert(builder).Return()
+				case ssa.TypeV128:
+					// One 16-byte store covering the two consecutive slots.
+					builder.AllocateInstruction().
+						AsStore(ssa.OpcodeStore, v, paramsPtr, offset).
+						Insert(builder)
+					slot += 2
+					continue
 				}
 				builder.AllocateInstruction().
-					AsStore(ssa.OpcodeStore, v, paramsPtr, uint32(i)*8).
+					AsStore(ssa.OpcodeStore, v, paramsPtr, offset).
 					Insert(builder)
+				slot++
 			}
 		}
 
@@ -4175,10 +4132,91 @@ func (c *Compiler) lowerCallIndirect(typeIndex, tableIndex uint32) {
 	c.reloadAfterCall()
 }
 
+// lowerTerminationCheck emits the inline termination check used at loop
+// headers: load the entry module's Closed value through the pointer stored in
+// the execution context so that a close (e.g. context cancellation/timeout) is
+// observed promptly, and decrement a countdown so that the
+// check-module-exit-code trampoline is still invoked every
+// terminationCheckInterval iterations. The trampoline call is a Go scheduler
+// yield point; without it, tight Wasm loops occupying every P would starve the
+// goroutine that watches the context and sets Closed, and termination would
+// never be observed. The hot path is two loads, a counter update, and one
+// fall-through branch.
+func (c *Compiler) lowerTerminationCheck() {
+	builder := c.ssaBuilder
+	closedPtr := builder.AllocateInstruction().
+		AsLoad(c.execCtxPtrValue,
+			wazevoapi.ExecutionContextOffsetEntryModuleClosedPtr.U32(),
+			ssa.TypeI64,
+		).Insert(builder).Return()
+	closed := builder.AllocateInstruction().
+		AsLoad(closedPtr, 0, ssa.TypeI64).Insert(builder).Return()
+	zero := builder.AllocateInstruction().AsIconst64(0).Insert(builder)
+	checkClosed := builder.AllocateInstruction().
+		AsIcmp(closed, zero.Return(), ssa.IntegerCmpCondNotEqual).
+		Insert(builder).Return()
+	cnt := builder.AllocateInstruction().
+		AsLoad(c.execCtxPtrValue,
+			wazevoapi.ExecutionContextOffsetTerminationCheckCounter.U32(),
+			ssa.TypeI64,
+		).Insert(builder).Return()
+	one := builder.AllocateInstruction().AsIconst64(1).Insert(builder)
+	cntMinusOne := builder.AllocateInstruction().
+		AsIsub(cnt, one.Return()).Insert(builder).Return()
+	builder.AllocateInstruction().
+		AsStore(ssa.OpcodeStore, cntMinusOne, c.execCtxPtrValue,
+			wazevoapi.ExecutionContextOffsetTerminationCheckCounter.U32()).
+		Insert(builder)
+	// Signed <= 0 so that an uninitialized (zero) counter also takes the
+	// slow path immediately instead of wrapping around.
+	checkCounter := builder.AllocateInstruction().
+		AsIcmp(cntMinusOne, zero.Return(), ssa.IntegerCmpCondSignedLessThanOrEqual).
+		Insert(builder).Return()
+	condInstr := builder.AllocateInstruction()
+	condInstr.AsBor(checkClosed, checkCounter)
+	cond := condInstr.Insert(builder).Return()
+
+	// The slow path calls the check-module-exit-code trampoline, which
+	// fails the invocation if the module is closed and otherwise resets
+	// the countdown and resumes execution.
+	slowBlk, contBlk := builder.AllocateBasicBlock(), builder.AllocateBasicBlock()
+	brnz := builder.AllocateInstruction()
+	brnz.AsBrnz(cond, ssa.ValuesNil, slowBlk)
+	builder.InsertInstruction(brnz)
+	br := builder.AllocateInstruction()
+	br.AsJump(ssa.ValuesNil, contBlk)
+	builder.InsertInstruction(br)
+
+	builder.SetCurrentBlock(slowBlk)
+	builder.Seal(slowBlk)
+	checkModuleExitCodePtr := builder.AllocateInstruction().
+		AsLoad(c.execCtxPtrValue,
+			wazevoapi.ExecutionContextOffsetCheckModuleExitCodeTrampolineAddress.U32(),
+			ssa.TypeI64,
+		).Insert(builder).Return()
+	args := c.allocateVarLengthValues(1, c.execCtxPtrValue)
+	builder.AllocateInstruction().
+		AsCallIndirect(checkModuleExitCodePtr, &c.checkModuleExitCodeSig, args).
+		Insert(builder)
+	brBack := builder.AllocateInstruction()
+	brBack.AsJump(ssa.ValuesNil, contBlk)
+	builder.InsertInstruction(brBack)
+
+	builder.SetCurrentBlock(contBlk)
+	builder.Seal(contBlk)
+}
+
 func (c *Compiler) lowerTailCallReturnCall(fnIndex uint32) {
 	isIndirect, sig, args, funcRefOrPtrValue := c.prepareCall(fnIndex)
 	builder := c.ssaBuilder
 	state := c.state()
+
+	// A self tail call never passes a loop header, so without this check the
+	// function would never observe WithCloseOnContextDone cancellation
+	// (C52 in codebase-audit-2026-10-18.md).
+	if !isIndirect && c.ensureTermination && fnIndex == uint32(c.wasmLocalFunctionIndex) {
+		c.lowerTerminationCheck()
+	}
 
 	call := builder.AllocateInstruction()
 	if isIndirect {
@@ -4830,8 +4868,14 @@ func (c *Compiler) loadExceptionParams(tagType *wasm.FunctionType) []ssa.Value {
 		).Insert(builder).Return()
 
 	var values []ssa.Value
-	for i, vt := range tagType.Params {
-		offset := uint32(i) * 8
+	// Params are slot-packed: one uint64 slot per scalar param, two per v128
+	// param, mirroring the stores emitted by the throw lowering (C14 in
+	// codebase-audit-2026-10-18.md). Float params were bitcast to integers at
+	// the throw site, so we load as integer and bitcast back to the original
+	// type.
+	slot := 0
+	for _, vt := range tagType.Params {
+		offset := uint32(slot) * 8
 		ssaType := WasmTypeToSSAType(vt)
 		switch ssaType {
 		case ssa.TypeF32:
@@ -4841,6 +4885,7 @@ func (c *Compiler) loadExceptionParams(tagType *wasm.FunctionType) []ssa.Value {
 				Insert(builder).Return()
 			val := builder.AllocateInstruction().AsBitcast(raw, ssa.TypeF32).Insert(builder).Return()
 			values = append(values, val)
+			slot++
 		case ssa.TypeF64:
 			// Stored as i64 at throw site; bitcast back to f64.
 			raw := builder.AllocateInstruction().
@@ -4848,11 +4893,20 @@ func (c *Compiler) loadExceptionParams(tagType *wasm.FunctionType) []ssa.Value {
 				Insert(builder).Return()
 			val := builder.AllocateInstruction().AsBitcast(raw, ssa.TypeF64).Insert(builder).Return()
 			values = append(values, val)
+			slot++
+		case ssa.TypeV128:
+			// One 16-byte load covering the two consecutive slots.
+			val := builder.AllocateInstruction().
+				AsLoad(paramsPtr, offset, ssa.TypeV128).
+				Insert(builder).Return()
+			values = append(values, val)
+			slot += 2
 		default:
 			val := builder.AllocateInstruction().
 				AsLoad(paramsPtr, offset, ssaType).
 				Insert(builder).Return()
 			values = append(values, val)
+			slot++
 		}
 	}
 	return values

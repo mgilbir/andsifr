@@ -312,6 +312,12 @@ func (ce *callEngine) peekValues(count int) []uint64 {
 	return ce.stack[stackLen-count : stackLen]
 }
 
+// maskUint32 masks an i32 consumer: i32 values are allowed to carry garbage in
+// the upper 32 bits, and every operation consuming an i32 must mask before
+// using it as an index, size or condition (C44 in
+// codebase-audit-2026-10-18.md; see also #2488 for the earlier sweep).
+const maskUint32 = uint64(0xFFFFFFFF)
+
 func (ce *callEngine) drop(raw uint64) {
 	r := inclusiveRangeFromU64(raw)
 	if r.Start == -1 {
@@ -393,9 +399,16 @@ type snapshot struct {
 
 // Snapshot implements the same method as documented on experimental.Snapshotter.
 func (ce *callEngine) Snapshot() experimental.Snapshot {
+	var pc uint64
+	if len(ce.frames) > 0 {
+		// Record the current program counter: without it Restore restarted
+		// the top frame at pc 0 (C53 in codebase-audit-2026-10-18.md).
+		pc = ce.frames[len(ce.frames)-1].pc
+	}
 	return &snapshot{
 		stack:  slices.Clone(ce.stack),
 		frames: slices.Clone(ce.frames),
+		pc:     pc,
 		ce:     ce,
 	}
 }
@@ -743,6 +756,10 @@ func (ce *callEngine) CallWithStack(ctx context.Context, stack []uint64) error {
 
 func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []uint64, err error) {
 	m := ce.f.moduleInstance
+	if !m.BeginExecution() {
+		return nil, m.FailIfClosed()
+	}
+	defer m.EndExecution()
 	if ce.f.parent.ensureTermination {
 		select {
 		case <-ctx.Done():
@@ -913,14 +930,14 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 		case operationKindBr:
 			frame.pc = op.U1
 		case operationKindBrIf:
-			if ce.popValue() > 0 {
+			if ce.popValue()&maskUint32 > 0 {
 				ce.drop(op.U3)
 				frame.pc = op.U1
 			} else {
 				frame.pc = op.U2
 			}
 		case operationKindBrTable:
-			v := ce.popValue()
+			v := ce.popValue() & maskUint32
 			defaultAt := uint64(len(op.Us))/2 - 1
 			if v > defaultAt {
 				v = defaultAt
@@ -938,9 +955,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			}
 			frame.pc++
 		case operationKindCallIndirect:
-			offset := ce.popValue()
+			offset := ce.popValue() & maskUint32
 			table := tables[op.U2]
-			tf := ce.functionForOffset(table, offset, typeIDs[op.U1])
+			tf := ce.functionForOffset(table, offset&maskUint32, typeIDs[op.U1])
 
 			frameUnwound := ce.callWithUnwind(ctx, f.moduleInstance, tf)
 			if frameUnwound {
@@ -954,7 +971,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			ce.drop(op.U1)
 			frame.pc++
 		case operationKindSelect:
-			c := ce.popValue()
+			c := ce.popValue() & maskUint32
 			if op.B3 { // Target is vector.
 				x2Hi, x2Lo := ce.popValue(), ce.popValue()
 				if c == 0 {
@@ -1893,9 +1910,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			frame.pc++
 		case operationKindMemoryInit:
 			dataInstance := dataInstances[op.U1]
-			copySize := ce.popValue()
-			inDataOffset := ce.popValue()
-			inMemoryOffset := ce.popValue()
+			copySize := ce.popValue() & maskUint32
+			inDataOffset := ce.popValue() & maskUint32
+			inMemoryOffset := ce.popValue() & maskUint32
 			if inDataOffset+copySize > uint64(len(dataInstance)) ||
 				inMemoryOffset+copySize > uint64(len(memoryInst.Buffer)) {
 				panic(wasmruntime.ErrRuntimeOutOfBoundsMemoryAccess)
@@ -1908,9 +1925,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			frame.pc++
 		case operationKindMemoryCopy:
 			memLen := uint64(len(memoryInst.Buffer))
-			copySize := ce.popValue()
-			sourceOffset := ce.popValue()
-			destinationOffset := ce.popValue()
+			copySize := ce.popValue() & maskUint32
+			sourceOffset := ce.popValue() & maskUint32
+			destinationOffset := ce.popValue() & maskUint32
 			if sourceOffset+copySize > memLen || destinationOffset+copySize > memLen {
 				panic(wasmruntime.ErrRuntimeOutOfBoundsMemoryAccess)
 			} else if copySize != 0 {
@@ -1919,9 +1936,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			}
 			frame.pc++
 		case operationKindMemoryFill:
-			fillSize := ce.popValue()
+			fillSize := ce.popValue() & maskUint32
 			value := byte(ce.popValue())
-			offset := ce.popValue()
+			offset := ce.popValue() & maskUint32
 			if fillSize+offset > uint64(len(memoryInst.Buffer)) {
 				panic(wasmruntime.ErrRuntimeOutOfBoundsMemoryAccess)
 			} else if fillSize != 0 {
@@ -1941,9 +1958,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			frame.pc++
 		case operationKindTableInit:
 			elementInstance := elementInstances[op.U1]
-			copySize := ce.popValue()
-			inElementOffset := ce.popValue()
-			inTableOffset := ce.popValue()
+			copySize := ce.popValue() & maskUint32
+			inElementOffset := ce.popValue() & maskUint32
+			inTableOffset := ce.popValue() & maskUint32
 			table := tables[op.U2]
 			if inElementOffset+copySize > uint64(len(elementInstance)) ||
 				inTableOffset+copySize > uint64(len(table.References)) {
@@ -1957,9 +1974,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			frame.pc++
 		case operationKindTableCopy:
 			srcTable, dstTable := tables[op.U1].References, tables[op.U2].References
-			copySize := ce.popValue()
-			sourceOffset := ce.popValue()
-			destinationOffset := ce.popValue()
+			copySize := ce.popValue() & maskUint32
+			sourceOffset := ce.popValue() & maskUint32
+			destinationOffset := ce.popValue() & maskUint32
 			if sourceOffset+copySize > uint64(len(srcTable)) || destinationOffset+copySize > uint64(len(dstTable)) {
 				panic(wasmruntime.ErrRuntimeInvalidTableAccess)
 			} else if copySize != 0 {
@@ -1972,7 +1989,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 		case operationKindTableGet:
 			table := tables[op.U1]
 
-			offset := ce.popValue()
+			offset := ce.popValue() & maskUint32
 			if offset >= uint64(len(table.References)) {
 				panic(wasmruntime.ErrRuntimeInvalidTableAccess)
 			}
@@ -1983,7 +2000,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			table := tables[op.U1]
 			ref := ce.popValue()
 
-			offset := ce.popValue()
+			offset := ce.popValue() & maskUint32
 			if offset >= uint64(len(table.References)) {
 				panic(wasmruntime.ErrRuntimeInvalidTableAccess)
 			}
@@ -1996,15 +2013,15 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			frame.pc++
 		case operationKindTableGrow:
 			table := tables[op.U1]
-			num, ref := ce.popValue(), ce.popValue()
+			num, ref := ce.popValue()&maskUint32, ce.popValue()
 			ret := table.Grow(uint32(num), uintptr(ref))
 			ce.pushValue(uint64(ret))
 			frame.pc++
 		case operationKindTableFill:
 			table := tables[op.U1]
-			num := ce.popValue()
+			num := ce.popValue() & maskUint32
 			ref := uintptr(ce.popValue())
-			offset := ce.popValue()
+			offset := ce.popValue() & maskUint32
 			if num+offset > uint64(len(table.References)) {
 				panic(wasmruntime.ErrRuntimeInvalidTableAccess)
 			} else if num > 0 {
@@ -4540,11 +4557,28 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			tagIndex := uint32(op.U1)
 			tag := moduleInst.Tags[tagIndex]
 			paramCount := len(tag.Type.Params)
-			params := make([]uint64, paramCount)
+			// Params are slot-packed: one uint64 slot per scalar param, two per
+			// v128 param (v128 values are pushed as lo,hi pairs), mirroring the
+			// wazevo lowering (C14 in codebase-audit-2026-10-18.md).
+			params := make([]uint64, wasm.ExceptionParamSlots(tag.Type.Params))
+			slot := len(params)
 			for i := paramCount - 1; i >= 0; i-- {
-				params[i] = ce.popValue()
+				if tag.Type.Params[i] == wasm.ValueTypeV128 {
+					hi := ce.popValue()
+					lo := ce.popValue()
+					slot -= 2
+					params[slot], params[slot+1] = lo, hi
+				} else {
+					slot--
+					params[slot] = ce.popValue()
+				}
 			}
 			exn := &wasm.Exception{Tag: tag, Params: params}
+			// Root the exception in the store: guest code may hold this exnref
+			// (in locals, tables or globals) as a raw pointer the Go GC cannot
+			// see; without a root it could be collected and throw_ref would read
+			// freed memory (C15 in codebase-audit-2026-10-18.md).
+			moduleInst.KeepExceptionAlive(exn)
 			if clause, values := searchExceptionTable(exn, frame); clause != nil {
 				ce.applyExceptionHandler(frame, clause, values)
 				continue
@@ -4573,7 +4607,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 		case operationKindTailCallReturnCallIndirect:
 			offset := ce.popValue()
 			table := tables[op.U2]
-			tf := ce.functionForOffset(table, offset, typeIDs[op.U1])
+			tf := ce.functionForOffset(table, offset&maskUint32, typeIDs[op.U1])
 
 			// We are allowing proper tail calls only across functions that belong to the same
 			// module; for indirect calls, we have to enforce it at run-time.

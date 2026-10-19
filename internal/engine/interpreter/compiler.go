@@ -933,8 +933,19 @@ operatorSwitch:
 			newOperationSelect(isTargetVector),
 		)
 	case wasm.OpcodeTypedSelect:
-		// Skips two bytes: vector size fixed to 1, and the value type for select.
+		// Skips two bytes: vector size fixed to 1, and the first byte of the value type.
 		c.pc += 2
+		// If the value type is a concrete reference type, the heap type is a signed LEB128
+		// which can span multiple bytes. Validation skipped all of its bytes (see
+		// func_validation.go); skip the remainder here so the engine consumes exactly the
+		// bytes validation saw.
+		if b := c.body[c.pc-1]; b == wasm.RefPrefixNullable || b == wasm.RefPrefixNonNullable {
+			_, num, err := leb128.DecodeInt33AsInt64(bytes.NewReader(c.body[c.pc:]))
+			if err != nil {
+				return fmt.Errorf("read heap type for %s: %v", wasm.OpcodeTypedSelectName, err)
+			}
+			c.pc += num
+		}
 		// If it is on the unreachable state, ignore the instruction.
 		if c.unreachableState.on {
 			break operatorSwitch
@@ -3549,6 +3560,12 @@ operatorSwitch:
 			c.emit(dropOp)
 			c.emit(newOperationBr(functionFrame.asLabel()))
 		} else {
+			// A self tail call never passes a loop header: check the exit code
+			// so self-recursion still observes WithCloseOnContextDone
+			// cancellation (C52 in codebase-audit-2026-10-18.md).
+			if c.ensureTermination && index == uint32(c.module.ImportFunctionCount)+uint32(c.next) {
+				c.emit(newOperationBuiltinFunctionCheckExitCode())
+			}
 			c.emit(newOperationTailCallReturnCall(index))
 		}
 
