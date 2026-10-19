@@ -352,7 +352,10 @@ func (m *moduleEngine) FunctionInstanceReference(funcIndex wasm.Index) wasm.Refe
 
 // LookupFunction implements wasm.ModuleEngine.
 func (m *moduleEngine) LookupFunction(t *wasm.TableInstance, typeId wasm.FunctionTypeID, tableOffset wasm.Index) (*wasm.ModuleInstance, wasm.Index) {
-	if tableOffset >= uint32(len(t.References)) || t.Type != wasm.RefTypeFuncref {
+	// Tables of concrete reference types are valid call_indirect targets
+	// under typed function references (see the validator, C75).
+	if tableOffset >= uint32(len(t.References)) ||
+		(t.Type != wasm.RefTypeFuncref && !t.Type.IsConcreteRef()) {
 		panic(wasmruntime.ErrRuntimeInvalidTableAccess)
 	}
 	rawPtr := t.References[tableOffset]

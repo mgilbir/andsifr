@@ -753,7 +753,13 @@ func (m *Module) validateFunctionWithMaxStackValues(
 			}
 
 			table := tables[tableIndex]
-			if table.Type != RefTypeFuncref {
+			// Tables of concrete reference types ((ref null $t)) are
+			// subtypes of funcref and usable by call_indirect under the typed
+			// function references proposal; they were previously rejected
+			// (C75 in codebase-audit-2026-10-18.md).
+			if table.Type != RefTypeFuncref &&
+				!(table.Type.IsConcreteRef() &&
+					enabledFeatures.IsEnabled(experimental.CoreFeaturesTypedFunctionReferences)) {
 				return fmt.Errorf("table is not funcref type but was %s for %s", RefTypeName(table.Type), opcodeName)
 			}
 

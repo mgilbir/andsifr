@@ -24,7 +24,33 @@ func ensureElementKindFuncRef(r *bytes.Reader) error {
 // https://www.w3.org/TR/2019/REC-wasm-core-1-20191205/#element-section%E2%91%A0
 func encodeElement(e *wasm.ElementSegment) (ret []byte) {
 	if e.Mode == wasm.ElementModeActive {
-		ret = append(ret, leb128.EncodeInt32(int32(e.TableIndex))...)
+		// A zero Type means the fixture did not care: default to funcref
+		// (the legacy encoding implies it).
+		if e.Type != wasm.RefTypeFuncref && e.Type != 0 {
+			// Modern encoding, prefix 6: tableidx, offset expr, reftype,
+			// vec(const_expr) -- the only way to express a typed active
+			// element segment.
+			ret = append(ret, leb128.EncodeUint32(6)...)
+			ret = append(ret, leb128.EncodeUint32(uint32(e.TableIndex))...)
+			ret = append(ret, encodeConstantExpression(e.OffsetExpr)...)
+			ret = append(ret, EncodeValueType(e.Type)...)
+			ret = append(ret, leb128.EncodeUint32(uint32(len(e.Init)))...)
+			for _, expr := range e.Init {
+				ret = append(ret, expr.Data...)
+			}
+			return ret
+		}
+		if e.TableIndex != 0 {
+			// Modern encoding, prefix 2: tableidx, elemkind, offset expr,
+			// vec(funcidx). The previous encoder wrote the table index into
+			// the flags position, mis-encoding any non-zero table index.
+			ret = append(ret, leb128.EncodeUint32(2)...)
+			ret = append(ret, leb128.EncodeUint32(uint32(e.TableIndex))...)
+			ret = append(ret, 0x00) // elemkind: funcref
+		} else {
+			// Legacy encoding, prefix 0: table 0 implied.
+			ret = append(ret, 0x00)
+		}
 		ret = append(ret, encodeConstantExpression(e.OffsetExpr)...)
 		ret = append(ret, leb128.EncodeUint32(uint32(len(e.Init)))...)
 		for _, expr := range e.Init {
