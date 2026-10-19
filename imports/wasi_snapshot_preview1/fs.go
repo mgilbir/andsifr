@@ -6,8 +6,8 @@ import (
 	"io/fs"
 	"math"
 	"path"
+	"runtime"
 	"strings"
-	"unsafe"
 
 	"github.com/mgilbir/andsifr/api"
 	experimentalsys "github.com/mgilbir/andsifr/experimental/sys"
@@ -516,6 +516,11 @@ func fdFilestatSetTimesFn(_ context.Context, mod api.Module, params []uint64) ex
 	// Fall back to path based, despite it being less precise.
 	switch errno {
 	case experimentalsys.EPERM, experimentalsys.ENOSYS:
+		if f.FS == nil {
+			// stdio and sockets have no FS: the fallback would nil-panic
+			// (C49 in codebase-audit-2026-10-18.md).
+			return errno
+		}
 		errno = f.FS.Utimens(f.Name, atim, mtim)
 	}
 
@@ -828,9 +833,17 @@ func readv(mem api.Memory, iovs uint32, iovsCount uint32, reader func(buf []byte
 		nread += uint32(n)
 
 		if errno == experimentalsys.ENOSYS {
-			return 0, experimentalsys.EBADF // e.g. unimplemented for read
+			// e.g. unimplemented for read. If some bytes were already
+			// transferred, report them instead of discarding them.
+			if nread > 0 {
+				return nread, 0
+			}
+			return 0, experimentalsys.EBADF
 		} else if errno != 0 {
-			return 0, errno
+			// POSIX readv returns the number of bytes read before the error,
+			// so a retry does not duplicate or lose the partial transfer
+			// (C21 in codebase-audit-2026-10-18.md).
+			return nread, errno
 		} else if n < int(l) {
 			break // stop when we read less than capacity.
 		}
@@ -1306,9 +1319,16 @@ func writev(mem api.Memory, iovs uint32, iovsCount uint32, writer func(buf []byt
 		n, errno := writer(b)
 		nwritten += uint32(n)
 		if errno == experimentalsys.ENOSYS {
-			return 0, experimentalsys.EBADF // e.g. unimplemented for write
+			// e.g. unimplemented for write: report bytes already transferred.
+			if nwritten > 0 {
+				return nwritten, 0
+			}
+			return 0, experimentalsys.EBADF
 		} else if errno != 0 {
-			return 0, errno
+			// POSIX writev returns the bytes written before the error, so a
+			// retry does not duplicate the partial transfer (C21 in
+			// codebase-audit-2026-10-18.md).
+			return nwritten, errno
 		}
 	}
 	return nwritten, 0
@@ -1670,7 +1690,7 @@ func atPath(fsc *sys.FSContext, mem api.Memory, fd int32, p, pathLen uint32) (ex
 
 	// interesting_paths wants to break on root paths or anything that escapes.
 	// This part is the same as fs.FS.Open()
-	if !fs.ValidPath(pathName) {
+	if !fs.ValidPath(pathName) || pathEscapesOnWindows(pathName) {
 		return nil, "", experimentalsys.EPERM
 	}
 
@@ -1693,6 +1713,46 @@ func atPath(fsc *sys.FSContext, mem api.Memory, fd int32, p, pathLen uint32) (ex
 	}
 }
 
+// pathEscapesOnWindows reports whether the given path, already validated with
+// fs.ValidPath, can nevertheless escape the pre-open root or address a device
+// when the host is Windows. fs.ValidPath only understands '/'-separated
+// elements, so it accepts paths containing backslashes (a path separator on
+// Windows), drive-letter / NTFS alternate-data-stream colons and reserved
+// device names, all of which the guest can use to reach files outside its
+// pre-open (C16 in codebase-audit-2026-10-18.md).
+func pathEscapesOnWindows(pathName string) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	return windowsPathNeedsEscape(pathName)
+}
+
+// windowsPathNeedsEscape is the platform-independent core of
+// pathEscapesOnWindows, split out so it can be tested on any host.
+func windowsPathNeedsEscape(pathName string) bool {
+	if strings.ContainsAny(pathName, "\\:") {
+		return true
+	}
+	for _, elem := range strings.Split(pathName, "/") {
+		if base, _, _ := strings.Cut(elem, "."); isWindowsReservedDeviceName(base) {
+			return true
+		}
+	}
+	return false
+}
+
+// isWindowsReservedDeviceName reports whether name is one of the DOS device
+// names reserved in every directory on Windows.
+func isWindowsReservedDeviceName(name string) bool {
+	switch strings.ToUpper(name) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+	return false
+}
+
 func preopenPath(fsc *sys.FSContext, fd int32) (string, experimentalsys.Errno) {
 	if f, ok := fsc.LookupFile(fd); !ok {
 		return "", experimentalsys.EBADF // closed
@@ -1700,8 +1760,12 @@ func preopenPath(fsc *sys.FSContext, fd int32) (string, experimentalsys.Errno) {
 		return "", experimentalsys.EBADF
 	} else if isDir, errno := f.File.IsDir(); errno != 0 || !isDir {
 		// In wasip1, only directories can be returned by fd_prestat_get as
-		// there are no prestat types defined for files or sockets.
-		return "", errno
+		// there are no prestat types defined for files or sockets. A
+		// preopen-flagged non-directory (stdio, TCP listeners) must be
+		// reported as not preopened: returning success with an empty name
+		// made the guest believe fd 0 was a preopened directory (C51 in
+		// codebase-audit-2026-10-18.md).
+		return "", experimentalsys.EBADF
 	} else {
 		return f.Name, 0
 	}
@@ -1964,10 +2028,14 @@ func pathSymlinkFn(_ context.Context, mod api.Module, params []uint64) experimen
 		return errno
 	}
 
+	// Copy the link target out of guest memory: handing the live guest buffer
+	// to the FS via unsafe.String lets a concurrent guest write race the FS
+	// implementation's validation (C48 in codebase-audit-2026-10-18.md).
+	oldPathName := string(oldPathBuf)
 	return dir.FS.Symlink(
 		// Do not join old path since it's only resolved when dereference the link created here.
 		// And the dereference result depends on the opening directory's file descriptor at that point.
-		unsafe.String(&oldPathBuf[0], int(oldPathLen)),
+		oldPathName,
 		newPathName,
 	)
 }

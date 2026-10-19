@@ -61,6 +61,12 @@ func pollOneoffFn(_ context.Context, mod api.Module, params []uint64) sys.Errno 
 	mem := mod.Memory()
 
 	// Ensure capacity prior to the read loop to reduce error handling.
+	// The size arithmetic must not wrap: a huge nsubscriptions would
+	// otherwise produce a small in-bounds buffer and out-of-bounds event
+	// writes below (C46 in codebase-audit-2026-10-18.md).
+	if uint64(nsubscriptions) > (1<<32-1)/48 {
+		return sys.EINVAL
+	}
 	inBuf, ok := mem.Read(in, nsubscriptions*48)
 	if !ok {
 		return sys.EFAULT
@@ -187,7 +193,14 @@ func pollOneoffFn(_ context.Context, mod api.Module, params []uint64) sys.Errno 
 			continue
 		}
 		start := time.Now()
-		ready, errno := p.Poll(sys.POLLIN, int32(remaining.Milliseconds()))
+		// Clamp to the int32 the Poll API takes: a multi-day budget would
+		// otherwise wrap to a negative timeout (C46 in
+		// codebase-audit-2026-10-18.md).
+		ms := remaining.Milliseconds()
+		if ms > 1<<31-1 {
+			ms = 1<<31 - 1
+		}
+		ready, errno := p.Poll(sys.POLLIN, int32(ms))
 		switch errno {
 		case 0:
 			if ready {

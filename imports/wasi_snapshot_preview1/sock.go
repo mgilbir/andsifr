@@ -34,7 +34,12 @@ func sockAcceptFn(_ context.Context, mod api.Module, params []uint64) (errno sys
 
 	var connFD int32
 	if connFD, errno = fsc.SockAccept(fd, nonblock); errno == 0 {
-		mem.WriteUint32Le(resultFd, uint32(connFD))
+		// If the result cannot be written back, the accepted connection would
+		// leak: close it instead (C50 in codebase-audit-2026-10-18.md).
+		if !mem.WriteUint32Le(resultFd, uint32(connFD)) {
+			_ = fsc.CloseFile(connFD)
+			return sys.EFAULT
+		}
 	}
 	return
 }

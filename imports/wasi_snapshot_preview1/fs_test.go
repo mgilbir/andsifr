@@ -3808,11 +3808,11 @@ func Test_pathOpen(t *testing.T) {
 			name:          "sysfs.ReadFS O_CREAT",
 			fs:            readFS,
 			oflags:        wasip1.O_CREAT,
-			expectedErrno: wasip1.ErrnoNosys,
+			expectedErrno: wasip1.ErrnoRofs,
 			path:          func(*testing.T) string { return "creat" },
 			expectedLog: `
 ==> wasi_snapshot_preview1.path_open(fd=3,dirflags=,path=creat,oflags=CREAT,fs_rights_base=,fs_rights_inheriting=,fdflags=)
-<== (opened_fd=,errno=ENOSYS)
+<== (opened_fd=,errno=EROFS)
 `,
 		},
 		{
@@ -3837,11 +3837,11 @@ func Test_pathOpen(t *testing.T) {
 			name:          "sysfs.ReadFS O_CREAT O_TRUNC",
 			fs:            readFS,
 			oflags:        wasip1.O_CREAT | wasip1.O_TRUNC,
-			expectedErrno: wasip1.ErrnoNosys,
+			expectedErrno: wasip1.ErrnoRofs,
 			path:          func(t *testing.T) (file string) { return joinPath(dirName, "O_CREAT-O_TRUNC") },
 			expectedLog: `
 ==> wasi_snapshot_preview1.path_open(fd=3,dirflags=,path=dir/O_CREAT-O_TRUNC,oflags=CREAT|TRUNC,fs_rights_base=,fs_rights_inheriting=,fdflags=)
-<== (opened_fd=,errno=ENOSYS)
+<== (opened_fd=,errno=EROFS)
 `,
 		},
 		{
@@ -3900,11 +3900,11 @@ func Test_pathOpen(t *testing.T) {
 			name:          "sysfs.ReadFS O_TRUNC",
 			fs:            readFS,
 			oflags:        wasip1.O_TRUNC,
-			expectedErrno: wasip1.ErrnoNosys,
+			expectedErrno: wasip1.ErrnoRofs,
 			path:          func(*testing.T) string { return "trunc" },
 			expectedLog: `
 ==> wasi_snapshot_preview1.path_open(fd=3,dirflags=,path=trunc,oflags=TRUNC,fs_rights_base=,fs_rights_inheriting=,fdflags=)
-<== (opened_fd=,errno=ENOSYS)
+<== (opened_fd=,errno=EROFS)
 `,
 		},
 		{

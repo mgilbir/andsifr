@@ -28,10 +28,12 @@ const _POLLIN = 0x0001
 
 // _poll implements poll on Linux via ppoll.
 func _poll(fds []pollFd, timeoutMillis int32) (n int, errno sys.Errno) {
-	var ts syscall.Timespec
-	if timeoutMillis >= 0 {
-		ts = syscall.NsecToTimespec(int64(time.Duration(timeoutMillis) * time.Millisecond))
+	if timeoutMillis < 0 {
+		// Negative timeout means block indefinitely: a zero Timespec would
+		// return immediately instead (C46 in codebase-audit-2026-10-18.md).
+		return ppoll(fds, nil)
 	}
+	ts := syscall.NsecToTimespec(int64(time.Duration(timeoutMillis) * time.Millisecond))
 	return ppoll(fds, &ts)
 }
 
