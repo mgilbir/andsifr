@@ -4,7 +4,7 @@
 // The name sysfs was chosen because wazero's public API has a "sys" package,
 // which was named after https://github.com/golang/sys.
 //
-// This tracked in https://github.com/mgilbir/andsifr/issues/1013
+// This tracked in https://github.com/tetratelabs/wazero/issues/1013
 package sysfs
 
 import (
