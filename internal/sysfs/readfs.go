@@ -12,6 +12,12 @@ type ReadFS struct {
 
 // OpenFile implements the same method as documented on sys.FS
 func (r *ReadFS) OpenFile(path string, flag experimentalsys.Oflag, perm fs.FileMode) (experimentalsys.File, experimentalsys.Errno) {
+	// O_CREAT and O_TRUNC modify the filesystem during open even when the access
+	// mode is read-only, so they must be rejected here: wrapping the opened file
+	// in readFile (below) only blocks writes performed through that handle.
+	if flag&(experimentalsys.O_CREAT|experimentalsys.O_TRUNC) != 0 {
+		return nil, experimentalsys.EROFS
+	}
 	// Mask the mutually exclusive bits as they determine write mode.
 	switch flag & (experimentalsys.O_RDONLY | experimentalsys.O_WRONLY | experimentalsys.O_RDWR) {
 	case experimentalsys.O_WRONLY, experimentalsys.O_RDWR:

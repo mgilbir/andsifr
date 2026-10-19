@@ -1246,3 +1246,29 @@ func dirEmbedMapFS(t *testing.T, tmpDir string) (fs.FS, fs.FS, fs.FS) {
 	dirFS := os.DirFS(tmpDir)
 	return dirFS, embedFS, mapFS
 }
+
+// TestStdioFile_mutation_blocked ensures the guest cannot mutate the
+// embedder's stdio: truncate, offset writes and time updates must fail
+// (C22 in codebase-audit-2026-10-18.md).
+func TestStdioFile_mutation_blocked(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer r.Close()
+	defer w.Close()
+
+	wF, err := NewStdioFile(false, w)
+	require.NoError(t, err)
+	rF, err := NewStdioFile(true, r)
+	require.NoError(t, err)
+
+	require.EqualErrno(t, experimentalsys.ENOTSUP, wF.Truncate(0))
+	require.EqualErrno(t, experimentalsys.ENOTSUP, rF.Truncate(0))
+	_, errno := wF.Pwrite([]byte("x"), 0)
+	require.EqualErrno(t, experimentalsys.ESPIPE, errno)
+	require.EqualErrno(t, experimentalsys.EPERM, wF.Utimens(0, 0))
+
+	// Plain writes and reads still work.
+	f, errno := wF.Write([]byte("hi"))
+	require.EqualErrno(t, 0, errno)
+	require.Equal(t, 2, f)
+}

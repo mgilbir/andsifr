@@ -197,3 +197,47 @@ func TestReadFS_Readlink(t *testing.T) {
 	testFS := &ReadFS{FS: writeable}
 	testReadlink(t, testFS, writeable)
 }
+
+// TestReadFS_OpenFile_CreatTrunc ensures a read-only mount cannot be mutated via
+// open flags, even when the access mode is O_RDONLY (C4 in
+// codebase-audit-2026-10-18.md: path_open with O_CREAT|O_TRUNC and rights=FD_READ
+// truncated or created files on a read-only mount).
+func TestReadFS_OpenFile_CreatTrunc(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeable := DirFS(tmpDir)
+	testFS := &ReadFS{FS: writeable}
+
+	require.NoError(t, fstest.WriteTestFiles(tmpDir))
+
+	tests := []struct {
+		name string
+		flag sys.Oflag
+	}{
+		{"trunc", sys.O_RDONLY | sys.O_TRUNC},
+		{"creat", sys.O_RDONLY | sys.O_CREAT},
+		{"creat_trunc", sys.O_RDONLY | sys.O_CREAT | sys.O_TRUNC},
+		{"rdwr_creat_trunc", sys.O_RDWR | sys.O_CREAT | sys.O_TRUNC},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+		t.Run(tc.name, func(t *testing.T) {
+			f, errno := testFS.OpenFile("animals.txt", tc.flag, 0o644)
+			require.EqualErrno(t, sys.EROFS, errno)
+			require.Nil(t, f)
+
+			// The same flags on the wrapped FS would mutate the file: ensure
+			// the file wasn't created or truncated by the rejected open.
+			st, errno := writeable.Stat("animals.txt")
+			require.EqualErrno(t, 0, errno)
+			require.Equal(t, int64(len("bear\ncat\nshark\ndinosaur\nhuman\n")), int64(st.Size))
+		})
+	}
+
+	// Opening for read without write-intent flags still works.
+	f, errno := testFS.OpenFile("animals.txt", sys.O_RDONLY, 0o644)
+	require.EqualErrno(t, 0, errno)
+	if errno == 0 {
+		require.EqualErrno(t, 0, f.Close())
+	}
+}

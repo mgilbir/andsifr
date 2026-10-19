@@ -114,6 +114,25 @@ func (f *stdioFile) Close() experimentalsys.Errno {
 	return 0
 }
 
+// Truncate implements File.Truncate. The guest must not resize the embedder's
+// stdio: fd_filestat_set_size on stdout/stderr would otherwise truncate (or
+// sparsely extend) the embedder's file (C22 in codebase-audit-2026-10-18.md).
+func (f *stdioFile) Truncate(offs int64) experimentalsys.Errno {
+	return experimentalsys.ENOTSUP
+}
+
+// Pwrite implements File.Pwrite. The guest must not reposition or write at an
+// offset in the embedder's stdio (C22 in codebase-audit-2026-10-18.md).
+func (f *stdioFile) Pwrite(buf []byte, offs int64) (int, experimentalsys.Errno) {
+	return 0, experimentalsys.ESPIPE
+}
+
+// Utimens implements File.Utimens. The guest must not re-time the embedder's
+// stdio (C22 in codebase-audit-2026-10-18.md).
+func (f *stdioFile) Utimens(atim, mtim int64) experimentalsys.Errno {
+	return experimentalsys.EPERM
+}
+
 // fsFile is used for wrapped fs.File, like os.Stdin or any fs.File
 // implementation. Notably, this does not have access to the full file path.
 // so certain operations can't be supported, such as inode lookups on Windows.
