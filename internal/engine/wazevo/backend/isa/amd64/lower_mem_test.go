@@ -195,6 +195,24 @@ func TestMachine_lowerAddendFromInstr(t *testing.T) {
 			exp: addend{raxVReg, 0, 0},
 		},
 		{
+			name: "uextend const32 with high bit set (zero-extended, C1)",
+			in: func(ctx *mockCompiler, b ssa.Builder, m *machine) *ssa.Instruction {
+				iconst32 := b.AllocateInstruction().AsIconst32(0x80000001).Insert(b)
+				ctx.definitions[iconst32.Return()] = backend.SSAValueDefinition{Instr: iconst32}
+				return b.AllocateInstruction().AsUExtend(iconst32.Return(), 32, 64).Insert(b)
+			},
+			exp: addend{regalloc.VRegInvalid, int64(uint32(0x80000001)), 0},
+		},
+		{
+			name: "sextend const32 with high bit set (sign-extended, C1)",
+			in: func(ctx *mockCompiler, b ssa.Builder, m *machine) *ssa.Instruction {
+				iconst32 := b.AllocateInstruction().AsIconst32(0x80000001).Insert(b)
+				ctx.definitions[iconst32.Return()] = backend.SSAValueDefinition{Instr: iconst32}
+				return b.AllocateInstruction().AsSExtend(iconst32.Return(), 32, 64).Insert(b)
+			},
+			exp: addend{regalloc.VRegInvalid, int64(-2147483647), 0}, // int32(0x80000001)
+		},
+		{
 			name: "uextend param i32",
 			in: func(ctx *mockCompiler, b ssa.Builder, m *machine) *ssa.Instruction {
 				p := b.CurrentBlock().AddParam(b, ssa.TypeI32)
