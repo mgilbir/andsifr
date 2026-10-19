@@ -999,7 +999,7 @@ L0 (SSA Block: blk0):
 	ins v143?.d[0], x142?
 	cnt v144?.8b, v143?.8b
 	uaddlv h145?, v144?.8b
-	mov x134?, v144?.d[0]
+	mov x134?, v145?.d[0]
 	clz x135?, x131?
 	rbit x141?, x131?
 	clz x136?, x141?

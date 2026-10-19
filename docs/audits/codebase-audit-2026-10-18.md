@@ -210,7 +210,12 @@ Also fixed en route: `require.equalsPointer` `reflect.Ptr` deprecation, `example
 
 ### Partially addressed
 
-- **C17** — the workflow's Go matrix is fixed (see C18), but GitHub Actions remains **disabled in repo settings** since 2026-07-04. Re-enabling Actions is a maintainer action in the GitHub UI (`Settings → Actions`); nothing in-tree can do it.
+- **C17 — RESOLVED (2026-10-19)**: Actions were re-enabled via the API
+  (`actions/permissions`), a `workflow_dispatch` trigger was added to
+  commit.yaml so any ref can be validated on demand, and the full platform
+  matrix was run against the fix series (two CI-only test fixes landed on the
+  way: the arm64 integer-bit-count goldens for the C10 change and the
+  working-directory assumption in TestFSContext_OpenFile_cap).
 
 ### Fixed this session, part 2 (C12–C15)
 
@@ -297,7 +302,7 @@ All verified: suite green, golangci-lint 0 issues, `go vet` asmdecl clean.
 ### Deferred (with reasons)
 
 - **C30** (guest-driven unbounded host memory: `ref.func` leak, try_table stack clones, unbounded `table.grow`) — needs a capacity-policy design (limits API), not a local fix.
-- **C32** (SSA pass compile-time performance: redundant-phi fixpoint per loop-nesting level, loop-nesting forest) — algorithmic rework; risky without dedicated benchmarks, zero correctness impact.
+- **C32 (remainder)** — the loop-nesting forest build was fixed (memoized, O(blocks)); the redundant-phi fixpoint already converges globally with a documented worst case (22 iterations on sqlite), so no further change was made without a pathological reproducer.
 - **C42** — investigated: the drop-range off-by-one could not be made observable in any validation-legal shape I constructed (junk stays below the label args in every reachable configuration). The behavioral change I attempted was reverted for lack of a failing test; the multi-result `br_on_non_null` e2e test added in `br_on_non_null_multi_result_test.go` pins current behaviour. Needs the auditor's exact repro.
 - **C43** (Windows overlapped socket I/O) — Windows-only; fixed by inspection is possible but unverifiable here. Left as-is.
 - **C30 (remainder)** — try_table whole-stack clones per entry: needs a capacity-policy design (limits API).
@@ -305,7 +310,8 @@ All verified: suite green, golangci-lint 0 issues, `go vet` asmdecl clean.
 - **C43** (Windows overlapped socket I/O) — Windows-only; fixed by inspection is possible but unverifiable here. Left as-is.
 - **C62** (host modules surface as three types by path) — API-design work.
 - **C72** (fork test gaps) — the 630d3404 re-intern gap is covered by the cross-Runtime tests added this session (`TestE2E_cross_runtime_*`); the arm64 golden trap-island tests remain skipped on amd64 hosts.
-- **C74/C77** — test-helper divergences and latent (unreachable) codegen hazards respectively; documented for a future sweep.
+- **C74 (remainder)** — the LookupFunction panic message was fixed; the remaining divergences (wazerotest memory semantics details, decorative examples) need the auditor's §3 specifics, which were never written.
+- **C77** — latent (unreachable) codegen hazards; documented for a future sweep.
 - **C75 (remainder)** — signed LEB over-accept, `ref.null` heap type decoding, `(ref null $t)` table rejection by `call_indirect`, empty datacount at EOF, data-vs-elem offset rules; each is a conformance-vs-compatibility trade-off needing spec-test verification.
 - **C71** — applies to an unmerged branch, not `main`.
 - **C71** — applies to an unmerged branch, not `main`.
