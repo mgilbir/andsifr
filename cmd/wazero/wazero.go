@@ -40,9 +40,15 @@ func doMain(stdOut io.Writer, stdErr logging.Writer) int {
 
 	flag.Parse()
 
-	if help || flag.NArg() == 0 {
+	if help {
 		printUsage(stdErr)
 		return 0
+	}
+	if flag.NArg() == 0 {
+		// A bare invocation should not exit 0 as if something ran (C80 in
+		// codebase-audit-2026-10-18.md).
+		printUsage(stdErr)
+		return 1
 	}
 
 	if flag.NArg() < 1 {
@@ -93,7 +99,11 @@ func doCompile(args []string, stdErr io.Writer) int {
 	cacheDir := cacheDirFlag(flags)
 	workers := workersFlag(flags)
 
-	_ = flags.Parse(args)
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(stdErr, "error parsing flags: %v\n", err)
+		printCompileUsage(stdErr, flags)
+		return 1
+	}
 
 	if help {
 		printCompileUsage(stdErr, flags)
@@ -218,7 +228,11 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	cacheDir := cacheDirFlag(flags)
 	workers := workersFlag(flags)
 
-	_ = flags.Parse(args)
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(stdErr, "error parsing flags: %v\n", err)
+		printRunUsage(stdErr, flags)
+		return 1
+	}
 
 	if help {
 		printRunUsage(stdErr, flags)
@@ -291,9 +305,9 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		rtc = rtc.WithCompilationCache(cache)
 	}
 
-	// Save the current state of the context for compilation.
-	// The -timeout flag is documented as only affecting the runtime of the module
-	// To honor this we must not pass the regular ctx as it will be potentially reassigned from this point onwards.
+	// The -timeout flag is documented as only affecting the runtime of the
+	// module, so the deadline is applied only after compilation (C66 in
+	// codebase-audit-2026-10-18.md): compilation must not consume the budget.
 	compilationCtx := ctx
 
 	if maxProcs := runtime.GOMAXPROCS(0); *workers > maxProcs {
@@ -303,15 +317,13 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 
 	compilationCtx = experimental.WithCompilationWorkers(compilationCtx, *workers)
 
-	if timeout > 0 {
-		newCtx, cancel := context.WithTimeout(ctx, timeout)
-		ctx = newCtx
-		defer cancel()
-		rtc = rtc.WithCloseOnContextDone(true)
-	} else if timeout < 0 {
+	if timeout < 0 {
 		fmt.Fprintf(stdErr, "timeout duration may not be negative, %v given\n", timeout)
 		printRunUsage(stdErr, flags)
 		return 1
+	} else if timeout > 0 {
+		// Needed so guest executions observe the (later-applied) deadline.
+		rtc = rtc.WithCloseOnContextDone(true)
 	}
 
 	if rc, sockCfg := validateListens(listens, stdErr); rc != 0 {
@@ -345,6 +357,14 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
+	// The -timeout budget starts when the module begins running, not during
+	// compilation (C66 in codebase-audit-2026-10-18.md).
+	if timeout > 0 {
+		newCtx, cancel := context.WithTimeout(ctx, timeout)
+		ctx = newCtx
+		defer cancel()
+	}
+
 	switch detectImports(guest.ImportedFunctions()) {
 	case modeWasi:
 		wasi_snapshot_preview1.MustInstantiate(ctx, rt)
@@ -368,6 +388,13 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			exitCode := exitErr.ExitCode()
 			if exitCode == sys.ExitCodeDeadlineExceeded {
 				fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
+			}
+			// The shell only observes the low 8 bits: without clamping,
+			// proc_exit(256) would exit 0, indistinguishable from success
+			// (C65 in codebase-audit-2026-10-18.md). Host-level sentinel
+			// codes (cancellation/deadline) are returned unchanged.
+			if exitCode > 125 && exitCode != sys.ExitCodeContextCanceled && exitCode != sys.ExitCodeDeadlineExceeded {
+				exitCode = 125
 			}
 			return int(exitCode)
 		}
