@@ -169,14 +169,19 @@ func (multi multiFunctionListenerFactory) NewFunctionListener(def api.FunctionDe
 
 type multiFunctionListener struct {
 	lstns []FunctionListener
-	stack stackIterator
 }
 
 func (multi *multiFunctionListener) Before(ctx context.Context, mod api.Module, def api.FunctionDefinition, params []uint64, si StackIterator) {
-	multi.stack.base = si
+	// Capture the stack once, then hand each listener its own iterator over
+	// the captured frames: the previously embedded iterator was shared across
+	// listeners, goroutines and instances, racing on base/index (C35 in
+	// codebase-audit-2026-10-18.md). The captured slices are read-only after
+	// this point, so sharing them is race-free.
+	stack := &stackIterator{base: si}
+	stack.drain()
 	for _, lstn := range multi.lstns {
-		multi.stack.index = -1
-		lstn.Before(ctx, mod, def, params, &multi.stack)
+		iter := &stackIterator{pcs: stack.pcs, fns: stack.fns, index: -1}
+		lstn.Before(ctx, mod, def, params, iter)
 	}
 }
 
@@ -200,6 +205,14 @@ type stackIterator struct {
 }
 
 func (si *stackIterator) Next() bool {
+	si.drain()
+	si.index++
+	return si.index < len(si.pcs)
+}
+
+// drain captures the frames of the base iterator, so they can be replayed
+// without holding on to (and re-positioning) the base.
+func (si *stackIterator) drain() {
 	if si.base != nil {
 		si.pcs = si.pcs[:0]
 		si.fns = si.fns[:0]
@@ -211,8 +224,6 @@ func (si *stackIterator) Next() bool {
 
 		si.base = nil
 	}
-	si.index++
-	return si.index < len(si.pcs)
 }
 
 func (si *stackIterator) ProgramCounter() ProgramCounter {
