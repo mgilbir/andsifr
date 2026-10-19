@@ -100,6 +100,15 @@ func (e Errno) Unwrap() error {
 		return syscall.EPERM
 	case EROFS:
 		return syscall.EROFS
+	case EMFILE:
+		return syscall.EMFILE
+	case ESPIPE:
+		return syscall.ESPIPE
+	case ERANGE:
+		// Missing case: errors.Is(ERANGE, syscall.EIO) used to be true
+		// because Unwrap fell through to EIO (C64 in
+		// codebase-audit-2026-10-18.md).
+		return syscall.ERANGE
 	default:
 		return syscall.EIO
 	}

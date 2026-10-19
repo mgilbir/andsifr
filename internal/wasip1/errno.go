@@ -162,6 +162,8 @@ const (
 	ErrnoRange
 	// ErrnoRofs Read-only file system.
 	ErrnoRofs
+	// ErrnoEmfile Too many open files.
+	ErrnoEmfile
 	// ErrnoSpipe Invalid seek.
 	ErrnoSpipe
 	// ErrnoSrch No such process.
@@ -308,6 +310,10 @@ func ToErrno(errno sys.Errno) Errno {
 		return ErrnoPerm
 	case sys.EROFS:
 		return ErrnoRofs
+	case sys.EMFILE:
+		return ErrnoEmfile
+	case sys.ESPIPE:
+		return ErrnoSpipe
 	default:
 		return ErrnoIo
 	}

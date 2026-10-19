@@ -41,6 +41,8 @@ const (
 	ENOTSUP
 	EPERM
 	EROFS
+	EMFILE
+	ESPIPE
 
 	// NOTE ENOTCAPABLE is defined in wasip1, but not in POSIX. wasi-libc
 	// converts it to EBADF, ESPIPE or EINVAL depending on the call site.
@@ -92,6 +94,10 @@ func (e Errno) Error() string {
 		return "operation not permitted"
 	case EROFS:
 		return "read-only file system"
+	case EMFILE:
+		return "emfile"
+	case ESPIPE:
+		return "espipe"
 	default:
 		return "Errno(" + strconv.Itoa(int(e)) + ")"
 	}
