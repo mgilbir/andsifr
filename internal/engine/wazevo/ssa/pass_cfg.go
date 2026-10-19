@@ -171,16 +171,53 @@ func subPassLoopDetection(b *builder) {
 func passBuildLoopNestingForest(b *builder) {
 	ent := b.entryBlk()
 	doms := b.dominators
-	for _, blk := range b.reversePostOrderedBasicBlocks {
-		n := doms[blk.id]
-		for !n.loopHeader && n != ent {
+
+	// nearestLoopHeaderAtOrAbove memoizes the nearest loop-header ancestor (or
+	// the entry block) at or above each block in the dominator tree: without
+	// it, the upward walk is repeated per block and the forest build is
+	// O(blocks x dom-depth) (C32 in codebase-audit-2026-10-18.md). Blocks are
+	// visited in reverse post order, so a dominator's answer is always
+	// available before its dominated blocks need it.
+	nearest := make(map[*basicBlock]*basicBlock)
+	nearestLoopHeaderAtOrAbove := func(n *basicBlock) *basicBlock {
+		var path []*basicBlock
+		for {
+			if r, ok := nearest[n]; ok {
+				for _, p := range path {
+					nearest[p] = r
+				}
+				return r
+			}
+			if n.loopHeader || n == ent {
+				nearest[n] = n
+				for _, p := range path {
+					nearest[p] = n
+				}
+				return n
+			}
+			path = append(path, n)
 			n = doms[n.id]
 		}
+	}
 
-		if n == ent && blk.loopHeader {
-			b.loopNestingForestRoots = append(b.loopNestingForestRoots, blk)
-		} else if n == ent {
-		} else if n.loopHeader {
+	for _, blk := range b.reversePostOrderedBasicBlocks {
+		idom := doms[blk.id]
+		if idom == ent {
+			// Direct child of the entry: the walk from the entry immediately
+			// ends at the entry.
+			if blk.loopHeader {
+				b.loopNestingForestRoots = append(b.loopNestingForestRoots, blk)
+			}
+			continue
+		}
+		n := nearestLoopHeaderAtOrAbove(idom)
+		if n == ent {
+			if blk.loopHeader {
+				b.loopNestingForestRoots = append(b.loopNestingForestRoots, blk)
+			}
+		} else {
+			// n.loopHeader is guaranteed here: the walk only stops at a loop
+			// header or the entry.
 			n.loopNestingForestChildren = n.loopNestingForestChildren.Append(&b.varLengthBasicBlockPool, blk)
 		}
 	}

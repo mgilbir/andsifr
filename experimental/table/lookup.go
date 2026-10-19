@@ -1,6 +1,7 @@
 package table
 
 import (
+	"fmt"
 	"github.com/mgilbir/andsifr/api"
 	"github.com/mgilbir/andsifr/internal/wasm"
 )
@@ -21,7 +22,14 @@ func LookupFunction(
 	module api.Module, tableIndex uint32, tableOffset uint32,
 	expectedParamTypes, expectedResultTypes []api.ValueType,
 ) api.Function {
-	m := module.(*wasm.ModuleInstance)
+	m, ok := module.(*wasm.ModuleInstance)
+	if !ok {
+		// Give a clear message instead of a raw type-assertion panic: the
+		// documented contract panics on failure, but a user passing e.g. a
+		// wazerotest.Module should learn why (C74 in
+		// codebase-audit-2026-10-18.md).
+		panic("table.LookupFunction requires the api.Module returned by the wazero runtime, but was " + fmt.Sprintf("%T", module))
+	}
 	typ := &wasm.FunctionType{Params: wasm.FromApiValueType(expectedParamTypes), Results: wasm.FromApiValueType(expectedResultTypes)}
 	typ.CacheNumInUint64()
 	typeID := m.GetFunctionTypeID(typ)
