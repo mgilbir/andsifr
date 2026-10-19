@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"testing"
 	gofstest "testing/fstest"
 
@@ -375,15 +376,21 @@ func TestFSContext_OpenFile_cap(t *testing.T) {
 	maxFileDescriptor = 8 // shrink to keep the test small
 	defer func() { maxFileDescriptor = prev }()
 
+	// Use a temp dir: the working directory of the test binary is not
+	// guaranteed to contain any particular file on CI.
+	dir := t.TempDir()
+	name := "cap-test.txt"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600))
+	dirfs := sysfs.DirFS(dir)
+
 	fsc := &FSContext{}
-	dirfs := sysfs.DirFS(".")
 	// Fill up to the cap.
 	for i := 0; i < 8; i++ {
-		fd, errno := fsc.OpenFile(dirfs, "fs_test.go", 0, 0)
+		fd, errno := fsc.OpenFile(dirfs, name, 0, 0)
 		require.Equal(t, sys.Errno(0), errno)
 		require.True(t, fd >= 0)
 	}
-	fd, errno := fsc.OpenFile(dirfs, "fs_test.go", 0, 0)
+	fd, errno := fsc.OpenFile(dirfs, name, 0, 0)
 	require.Equal(t, sys.EMFILE, errno)
 	require.Equal(t, int32(0), fd)
 }
