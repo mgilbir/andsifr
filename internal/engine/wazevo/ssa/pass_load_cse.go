@@ -40,6 +40,17 @@ type loadCSEEntry struct {
 //     everything;
 //   - atomic operations and fences invalidate everything, since reusing an
 //     earlier loaded value moves the read before the synchronization point.
+//
+// maxLoadCSECacheEntries bounds the number of tracked accesses within one
+// basic block: every store must scan the whole cache to invalidate entries it
+// might overlap (including those of other roots, which are assumed to
+// potentially overlap), making the pass quadratic in the cache size. A
+// pathological block with tens of thousands of stores made the pass take tens
+// of seconds (C31 in codebase-audit-2026-10-18.md); past the threshold the
+// cache is cleared instead, which only forfeits reuse and never affects
+// correctness.
+const maxLoadCSECacheEntries = 512
+
 func passRedundantLoadEliminationOpt(b *builder) {
 	cache := make(map[loadCSEKey]loadCSEEntry)
 	for blk := b.blockIteratorBegin(); blk != nil; blk = b.blockIteratorNext() {
@@ -60,9 +71,14 @@ func passRedundantLoadEliminationOpt(b *builder) {
 				storeSize := uint32(storeSizeInBits) / 8
 				root, staticOff := b.decomposePointer(ptr)
 				storeOff := staticOff + uint64(offset)
-				for k, e := range cache {
-					if k.root != root || rangesOverlap(k.offset, e.sizeInBytes, storeOff, storeSize) {
-						delete(cache, k)
+				if len(cache) > maxLoadCSECacheEntries {
+					// Only forfeits reuse; never affects correctness.
+					clear(cache)
+				} else {
+					for k, e := range cache {
+						if k.root != root || rangesOverlap(k.offset, e.sizeInBytes, storeOff, storeSize) {
+							delete(cache, k)
+						}
 					}
 				}
 				if op == OpcodeStore {
@@ -90,17 +106,41 @@ func (b *builder) decomposePointer(ptr Value) (root ValueID, offset uint64) {
 		}
 		x, y := def.Arg2()
 		x, y = b.resolveAlias(x), b.resolveAlias(y)
-		if xDef := b.InstructionOfValue(x); xDef != nil && xDef.Constant() {
-			offset += xDef.ConstantVal()
+		if xOff, ok := b.constAddend(x); ok {
+			offset += xOff
 			v = y
-		} else if yDef := b.InstructionOfValue(y); yDef != nil && yDef.Constant() {
-			offset += yDef.ConstantVal()
+		} else if yOff, ok := b.constAddend(y); ok {
+			offset += yOff
 			v = x
 		} else {
 			break
 		}
 	}
 	return v.ID(), offset
+}
+
+// constAddend reports the constant contribution of an Iadd operand: either an
+// Iconst64, or a UExtend of an Iconst32. The latter is what the frontend
+// emits for wasm memory indices: without peeling it, every access site
+// `memoryBase + Uextend(Iconst N)` hides a distinct root and the documented
+// `memoryBase + const` decomposition never fires for wasm memory (C70 in
+// codebase-audit-2026-10-18.md).
+func (b *builder) constAddend(v Value) (uint64, bool) {
+	def := b.InstructionOfValue(v)
+	if def == nil {
+		return 0, false
+	}
+	if def.Constant() {
+		return def.ConstantVal(), true
+	}
+	if def.Opcode() == OpcodeUExtend && v.Type() == TypeI64 {
+		inner := b.resolveAlias(def.Arg())
+		if innerDef := b.InstructionOfValue(inner); innerDef != nil && innerDef.Constant() {
+			// UExtend zero-extends the 32-bit constant.
+			return uint64(uint32(innerDef.ConstantVal())), true
+		}
+	}
+	return 0, false
 }
 
 // loadAccessSizeInBytes returns the number of bytes read by the given load opcode.
