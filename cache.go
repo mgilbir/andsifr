@@ -61,16 +61,37 @@ func NewCompilationCacheWithDir(dirname string) (CompilationCache, error) {
 
 // cache implements Cache interface.
 type cache struct {
-	// eng is the engine for this cache. If the cache is configured, the engine is shared across multiple instances of
-	// Runtime, and its lifetime is not bound to them. Instead, the engine is alive until Cache.Close is called.
-	engs      [engineKindCount]wasm.Engine
+	// engs holds one engine per (engine kind, core features) pair. If the
+	// cache is configured, engines are shared across multiple instances of
+	// Runtime, and their lifetime is not bound to them: each engine is alive
+	// until Cache.Close is called. Keying on features too prevents a second
+	// Runtime with different core features from silently reusing an engine
+	// compiled under the first Runtime's features (C61 in
+	// codebase-audit-2026-10-18.md).
+	engsMux   sync.Mutex
+	engs      map[engineKey]wasm.Engine
 	fileCache filecache.Cache
-	initOnces [engineKindCount]sync.Once
+}
+
+// engineKey identifies a shared engine inside a cache.
+type engineKey struct {
+	kind     engineKind
+	features api.CoreFeatures
 }
 
 func (c *cache) initEngine(ek engineKind, ne newEngine, ctx context.Context, features api.CoreFeatures) wasm.Engine {
-	c.initOnces[ek].Do(func() { c.engs[ek] = ne(ctx, features, c.fileCache) })
-	return c.engs[ek]
+	key := engineKey{kind: ek, features: features}
+	c.engsMux.Lock()
+	defer c.engsMux.Unlock()
+	if c.engs == nil {
+		c.engs = make(map[engineKey]wasm.Engine)
+	}
+	if eng, ok := c.engs[key]; ok {
+		return eng
+	}
+	eng := ne(ctx, features, c.fileCache)
+	c.engs[key] = eng
+	return eng
 }
 
 // Close implements the same method on the Cache interface.

@@ -9,6 +9,7 @@ import (
 	goruntime "runtime"
 	"testing"
 
+	"github.com/mgilbir/andsifr/api"
 	"github.com/mgilbir/andsifr/internal/platform"
 	"github.com/mgilbir/andsifr/internal/testing/require"
 	"github.com/mgilbir/andsifr/internal/wasm"
@@ -40,10 +41,13 @@ func TestCompilationCache(t *testing.T) {
 		require.NoError(t, err)
 
 		// add interpreter first, to ensure compiler support isn't order dependent
-		eng := foo.cache.engs[engineKindInterpreter]
+		kind := engineKindInterpreter
 		if platform.CompilerSupported() {
-			eng = foo.cache.engs[engineKindCompiler]
+			kind = engineKindCompiler
 		}
+		foo.cache.engsMux.Lock()
+		eng := foo.cache.engs[engineKey{kind: kind, features: api.CoreFeaturesV2}]
+		foo.cache.engsMux.Unlock()
 
 		// Try compiling.
 		compiled, err := foo.CompileModule(ctx, facWasm)
@@ -223,23 +227,30 @@ func requireChdirToTemp(t *testing.T) (string, string) {
 
 func TestCache_Close(t *testing.T) {
 	t.Run("all engines", func(t *testing.T) {
-		c := &cache{engs: [engineKindCount]wasm.Engine{&mockEngine{}, &mockEngine{}}}
+		c := &cache{engs: map[engineKey]wasm.Engine{
+			{kind: engineKindCompiler, features: api.CoreFeaturesV2}:    &mockEngine{},
+			{kind: engineKindInterpreter, features: api.CoreFeaturesV2}: &mockEngine{},
+		}}
 		err := c.Close(testCtx)
 		require.NoError(t, err)
-		for i := engineKind(0); i < engineKindCount; i++ {
-			require.True(t, c.engs[i].(*mockEngine).closed)
+		for _, eng := range c.engs {
+			require.True(t, eng.(*mockEngine).closed)
 		}
 	})
 	t.Run("only interp", func(t *testing.T) {
-		c := &cache{engs: [engineKindCount]wasm.Engine{nil, &mockEngine{}}}
+		c := &cache{engs: map[engineKey]wasm.Engine{
+			{kind: engineKindInterpreter, features: api.CoreFeaturesV2}: &mockEngine{},
+		}}
 		err := c.Close(testCtx)
 		require.NoError(t, err)
-		require.True(t, c.engs[engineKindInterpreter].(*mockEngine).closed)
+		require.True(t, c.engs[engineKey{kind: engineKindInterpreter, features: api.CoreFeaturesV2}].(*mockEngine).closed)
 	})
 	t.Run("only compiler", func(t *testing.T) {
-		c := &cache{engs: [engineKindCount]wasm.Engine{&mockEngine{}, nil}}
+		c := &cache{engs: map[engineKey]wasm.Engine{
+			{kind: engineKindCompiler, features: api.CoreFeaturesV2}: &mockEngine{},
+		}}
 		err := c.Close(testCtx)
 		require.NoError(t, err)
-		require.True(t, c.engs[engineKindCompiler].(*mockEngine).closed)
+		require.True(t, c.engs[engineKey{kind: engineKindCompiler, features: api.CoreFeaturesV2}].(*mockEngine).closed)
 	})
 }
