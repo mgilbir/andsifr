@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"unsafe"
 
 	"github.com/mgilbir/andsifr/api"
 )
@@ -108,7 +109,10 @@ func callGoFunc(ctx context.Context, mod api.Module, fn *reflect.Value, stack []
 
 			switch k {
 			case reflect.Float32:
-				val.SetFloat(float64(math.Float32frombits(uint32(raw))))
+				// Bit-preserving set: val.SetFloat would round-trip through
+				// float64, quieting signalling NaNs (C57 in
+				// codebase-audit-2026-10-18.md).
+				*(*float32)(unsafe.Pointer(val.Addr().UnsafePointer())) = math.Float32frombits(uint32(raw))
 			case reflect.Float64:
 				val.SetFloat(math.Float64frombits(raw))
 			case reflect.Uint32, reflect.Uint64, reflect.Uintptr:
@@ -126,7 +130,11 @@ func callGoFunc(ctx context.Context, mod api.Module, fn *reflect.Value, stack []
 	for i, ret := range fn.Call(in) {
 		switch ret.Kind() {
 		case reflect.Float32:
-			stack[i] = uint64(math.Float32bits(float32(ret.Float())))
+			// Bit-preserving read: ret.Float() converts through float64 and
+			// quietens signalling NaNs (C57 in codebase-audit-2026-10-18.md).
+			addr := reflect.New(ret.Type())
+			addr.Elem().Set(ret)
+			stack[i] = uint64(math.Float32bits(*(*float32)(unsafe.Pointer(addr.UnsafePointer()))))
 		case reflect.Float64:
 			stack[i] = math.Float64bits(ret.Float())
 		case reflect.Uint32, reflect.Uint64, reflect.Uintptr:

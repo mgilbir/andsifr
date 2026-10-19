@@ -245,3 +245,20 @@ func Test_callGoFunc(t *testing.T) {
 		})
 	}
 }
+
+// Test_callGoFunc_sNaN ensures reflection host funcs preserve signalling NaN
+// bit patterns in both directions: param marshalling and result marshalling
+// both used to convert through float64, quieting sNaNs (C57 in
+// codebase-audit-2026-10-18.md).
+func Test_callGoFunc_sNaN(t *testing.T) {
+	const snanBits = uint32(0x7fa00000) // sNaN with non-zero payload.
+	snan := math.Float32frombits(snanBits)
+
+	_, _, code, err := parseGoReflectFunc(func(x float32) float32 { return x })
+	require.NoError(t, err)
+
+	stack := []uint64{uint64(snanBits)}
+	code.GoFunc.(api.GoFunction).Call(testCtx, stack)
+	require.Equal(t, uint64(snanBits), stack[0])
+	_ = snan
+}
