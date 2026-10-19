@@ -163,7 +163,10 @@ func (f *tcpConnFile) close() experimentalsys.Errno {
 		return 0
 	}
 	f.closed = true
-	return f.Shutdown(socketapi.SHUT_RDWR)
+	// Close the underlying connection: calling Shutdown here would recurse
+	// into close() (already flagged) and never release the socket (C20 in
+	// codebase-audit-2026-10-18.md).
+	return experimentalsys.UnwrapOSError(f.tc.Close())
 }
 
 // SetNonblock implements the same method as documented on experimentalsys.PollableFile

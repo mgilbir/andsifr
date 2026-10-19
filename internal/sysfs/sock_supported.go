@@ -48,7 +48,12 @@ func (f *tcpConnFile) Shutdown(how int) experimentalsys.Errno {
 	case socketapi.SHUT_WR:
 		err = f.tc.CloseWrite()
 	case socketapi.SHUT_RDWR:
-		return f.close()
+		// Shut down both directions without closing the file descriptor:
+		// delegating to close() is a no-op once closed is flagged (C20).
+		if err = f.tc.CloseRead(); err != nil {
+			return experimentalsys.UnwrapOSError(err)
+		}
+		err = f.tc.CloseWrite()
 	default:
 		return experimentalsys.EINVAL
 	}

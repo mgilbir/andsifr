@@ -178,3 +178,29 @@ func TestTcpConnFile_SetNonblock(t *testing.T) {
 	require.EqualErrno(t, 0, errno)
 	require.True(t, file.IsNonblock())
 }
+
+// TestTcpConnFile_Close_closes_socket ensures fd_close on an accepted
+// connection actually releases the underlying socket: previously close()
+// delegated to Shutdown(SHUT_RDWR) which recursed into close() (already
+// flagged) and never closed the *net.TCPConn, leaking one host socket per
+// guest fd_close (C20 in codebase-audit-2026-10-18.md).
+func TestTcpConnFile_Close_closes_socket(t *testing.T) {
+	listen, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listen.Close()
+
+	tcpAddr, err := net.ResolveTCPAddr("tcp", listen.Addr().String())
+	require.NoError(t, err)
+	tcp, err := net.DialTCP("tcp", nil, tcpAddr)
+	require.NoError(t, err)
+
+	file := newTcpConn(tcp)
+	require.Equal(t, sys.Errno(0), file.Close())
+	// Closing twice is a no-op.
+	require.Equal(t, sys.Errno(0), file.Close())
+
+	// The socket must be really closed: a write fails with "use of closed".
+	buf := make([]byte, 4)
+	_, err = tcp.Read(buf)
+	require.Error(t, err)
+}
