@@ -1,5 +1,6 @@
 name: Test
 on:
+  workflow_dispatch: # Allows manually triggering CI to validate a push
   pull_request:
     branches: [main]
     paths-ignore:  # ignore docs as they are built with Netlify.
