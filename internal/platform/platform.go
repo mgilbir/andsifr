@@ -32,7 +32,11 @@ func compilerPlatformSupports(features api.CoreFeatures) bool {
 		}
 		fallthrough
 	case "dragonfly", "solaris", "illumos":
-		return runtime.GOARCH == "amd64" && CpuFeatures.Has(CpuFeatureAmd64SSE4_1)
+		// POPCNT is emitted unconditionally by the amd64 backend
+		// (ssa.OpcodePopcnt): it must be part of the compiler gate, not just
+		// SSE4.1 (C67 in codebase-audit-2026-10-18.md).
+		return runtime.GOARCH == "amd64" && CpuFeatures.Has(CpuFeatureAmd64SSE4_1) &&
+			CpuFeatures.Has(CpuFeatureAmd64POPCNT)
 	default:
 		return false
 	}

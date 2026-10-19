@@ -10,6 +10,12 @@ const (
 	CpuFeatureAmd64BMI1
 	// CpuExtraFeatureABM is the flag to query CpuFeatureFlags.Has for Advanced Bit Manipulation capabilities (e.g. LZCNT) on amd64
 	CpuFeatureAmd64ABM
+	// CpuFeatureAmd64POPCNT is the flag to query CpuFeatureFlags.Has for the
+	// POPCNT instruction on amd64. The backend emits POPCNT for
+	// ssa.OpcodePopcnt: SSE4.1 alone does not imply it (they are adjacent but
+	// distinct CPUID bits), so CompilerSupported must gate on both (C67 in
+	// codebase-audit-2026-10-18.md).
+	CpuFeatureAmd64POPCNT
 )
 
 const (

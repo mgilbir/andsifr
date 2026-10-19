@@ -12,6 +12,9 @@ func loadCpuFeatureFlags() (flags CpuFeatureFlags) {
 	if cpu.X86.HasBMI1 {
 		flags |= CpuFeatureAmd64BMI1
 	}
+	if cpu.X86.HasPOPCNT {
+		flags |= CpuFeatureAmd64POPCNT
+	}
 	// x/sys/cpu does not track the ABM explicitly.
 	// LZCNT combined with BMI1 and BMI2 completes the expanded ABM instruction set.
 	// Intel includes LZCNT in BMI1, and all AMD CPUs with POPCNT also have LZCNT.
