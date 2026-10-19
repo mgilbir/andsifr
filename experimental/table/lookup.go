@@ -2,6 +2,7 @@ package table
 
 import (
 	"fmt"
+
 	"github.com/mgilbir/andsifr/api"
 	"github.com/mgilbir/andsifr/internal/wasm"
 )
