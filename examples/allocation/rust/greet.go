@@ -64,7 +64,7 @@ func main() {
 	namePtr := results[0]
 	// This pointer was allocated by Rust, but owned by Go, So, we have to
 	// deallocate it when finished
-	defer deallocate.Call(ctx, namePtr, nameSize)
+	defer func() { _, _ = deallocate.Call(ctx, namePtr, nameSize) }()
 
 	// The pointer is a linear memory offset, which is where we write the name.
 	if !mod.Memory().Write(uint32(namePtr), []byte(name)) {

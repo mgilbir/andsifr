@@ -265,11 +265,11 @@ func Same(t TestingT, expected, actual interface{}, formatWithArgs ...interface{
 
 func equalsPointer(expected, actual interface{}) bool {
 	expectedV := reflect.ValueOf(expected)
-	if expectedV.Kind() != reflect.Ptr {
+	if expectedV.Kind() != reflect.Pointer {
 		panic("BUG: expected was not a pointer")
 	}
 	actualV := reflect.ValueOf(actual)
-	if actualV.Kind() != reflect.Ptr {
+	if actualV.Kind() != reflect.Pointer {
 		panic("BUG: actual was not a pointer")
 	}
 

@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -41,7 +40,11 @@ func TestRun(t *testing.T) {
 	if cmdPath := os.Getenv("WAZEROCLI"); cmdPath != "" {
 		cmdExe = cmdPath
 	} else {
-		cmdExe = filepath.Join(runtime.GOROOT(), "bin", "go")
+		var err error
+		cmdExe, err = exec.LookPath("go")
+		if err != nil {
+			panic(err) // go must be installed to run this test
+		}
 		cmdArgs = []string{"run", "../../cmd/wazero"}
 	}
 	cmdArgs = append(cmdArgs, "run", wasmPath)

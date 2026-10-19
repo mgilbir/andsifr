@@ -74,7 +74,7 @@ func run() error {
 		return errors.New("malloc failed")
 	}
 	// We have to free this pointer when finished.
-	defer free.Call(ctx, namePtr, nameSize)
+	defer func() { _, _ = free.Call(ctx, namePtr, nameSize) }()
 
 	// The pointer is a linear memory offset, which is where we write the name.
 	if !mod.Memory().Write(uint32(namePtr), []byte(name)) {

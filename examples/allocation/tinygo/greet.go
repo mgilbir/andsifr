@@ -70,7 +70,7 @@ func main() {
 	namePtr := results[0]
 	// This pointer is managed by TinyGo, but TinyGo is unaware of external usage.
 	// So, we have to free it when finished
-	defer free.Call(ctx, namePtr)
+	defer func() { _, _ = free.Call(ctx, namePtr) }()
 
 	// The pointer is a linear memory offset, which is where we write the name.
 	if !mod.Memory().Write(uint32(namePtr), []byte(name)) {

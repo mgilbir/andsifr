@@ -163,8 +163,14 @@ func DecodeModule(
 	}
 
 	if dwarfEnabled {
-		d, _ := dwarf.New(abbrev, nil, nil, info, line, nil, ranges, str)
-		m.DWARFLines = wasmdebug.NewDWARFLines(d)
+		// Best effort: DWARF is optional debug metadata. If the sections cannot
+		// be parsed (e.g. hand-truncated or unsupported versions), compilation
+		// still succeeds but line/source-offset info is silently unavailable
+		// (module.DWARFLines stays nil).
+		d, err := dwarf.New(abbrev, nil, nil, info, line, nil, ranges, str)
+		if err == nil {
+			m.DWARFLines = wasmdebug.NewDWARFLines(d)
+		}
 	}
 
 	functionCount, codeCount := m.SectionElementCount(wasm.SectionIDFunction), m.SectionElementCount(wasm.SectionIDCode)

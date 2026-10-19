@@ -430,7 +430,7 @@ func (a *Allocator[I, B, F]) livenessAnalysis(f F) {
 			}
 
 			for _, st := range succInfo.liveIns {
-				if st.phiBlk() != succ && st.spilled != flagLive { //nolint:gosimple
+				if st.phiBlk() != succ && st.spilled != flagLive { //nolint:staticcheck
 					// We use .spilled field to store the flag.
 					st.spilled = flagLive
 					a.ss = append(a.ss, st)
@@ -454,7 +454,7 @@ func (a *Allocator[I, B, F]) livenessAnalysis(f F) {
 				if !use.IsRealReg() {
 					st := s.getOrAllocateVRegState(use)
 					// Note: We use .spilled field to store the flag.
-					if st.spilled != flagLive { //nolint:gosimple
+					if st.spilled != flagLive { //nolint:staticcheck
 						st.spilled = flagLive
 						a.ss = append(a.ss, st)
 					}
@@ -471,7 +471,7 @@ func (a *Allocator[I, B, F]) livenessAnalysis(f F) {
 
 		for _, st := range a.ss {
 			// We use .spilled field to store the flag.
-			if st.spilled == flagLive { //nolint:gosimple
+			if st.spilled == flagLive { //nolint:staticcheck
 				info.liveIns = append(info.liveIns, st)
 				st.spilled = false
 			}
@@ -521,7 +521,7 @@ func (a *Allocator[I, B, F]) loopTreeDFS(f F, entry B) {
 				begin := len(childInfo.liveIns)
 				for _, st := range a.ss {
 					// We use .spilled field to store the flag.
-					if st.spilled == flagPending { //nolint:gosimple
+					if st.spilled == flagPending { //nolint:staticcheck
 						st.spilled = flagDone
 						// TODO: deduplicate, though I don't think it has much impact.
 						childInfo.liveIns = append(childInfo.liveIns, st)

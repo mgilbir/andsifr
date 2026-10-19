@@ -1539,14 +1539,17 @@ func testListenerStackIteratorOffset(t *testing.T, r wazero.Runtime) {
 	}
 	ctx := experimental.WithFunctionListenerFactory(testCtx, fnListener)
 
-	// Minimal DWARF info section to make debug/dwarf.New() happy.
-	// Necessary to make the compiler emit source offset maps.
+	// Minimal DWARF sections. debug/dwarf.New (Go 1.27+) eagerly parses the
+	// .debug_abbrev table for every CU, so an (empty) abbrev section is needed
+	// alongside the minimal .debug_info: a single 0x00 byte terminates the
+	// abbrev table. Necessary to make the compiler emit source offset maps.
 	minimalDWARFInfo := []byte{
 		0x7, 0x0, 0x0, 0x0, // length (len(info) - 4)
 		0x3, 0x0, // version (between 3 and 5 makes it easier)
 		0x0, 0x0, 0x0, 0x0, // abbrev offset
 		0x0, // asize
 	}
+	minimalDWARFAbbrev := []byte{0x0}
 
 	encoded := binaryencoding.EncodeModule(&wasm.Module{
 		TypeSection: []wasm.FunctionType{
@@ -1592,7 +1595,10 @@ func testListenerStackIteratorOffset(t *testing.T, r wazero.Runtime) {
 			{Name: "f2", Type: wasm.ExternTypeFunc, Index: 1},
 			{Name: "f3", Type: wasm.ExternTypeFunc, Index: 2},
 		},
-		CustomSections: []*wasm.CustomSection{{Name: ".debug_info", Data: minimalDWARFInfo}},
+		CustomSections: []*wasm.CustomSection{
+			{Name: ".debug_info", Data: minimalDWARFInfo},
+			{Name: ".debug_abbrev", Data: minimalDWARFAbbrev},
+		},
 	})
 	decoded, err := binary.DecodeModule(encoded, api.CoreFeaturesV2, 0, false, true, true)
 	require.NoError(t, err)
