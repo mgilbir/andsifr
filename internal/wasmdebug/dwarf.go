@@ -179,6 +179,14 @@ entry:
 	// In the inlined case, the line info is the innermost inlined function call.
 	inlined := len(inlinedRoutines) != 0
 	prefix := fmt.Sprintf("%#x: ", instructionOffset)
+	if le.File == nil {
+		// Malformed .debug_line (e.g. set_file past the file table, or file 0
+		// in DWARF<5) yields a LineEntry with a nil File. This runs inside the
+		// trap formatting path, so a nil dereference would crash the host
+		// instead of surfacing the guest trap (C33 in
+		// codebase-audit-2026-10-18.md).
+		return
+	}
 	ret = append(ret, formatLine(prefix, le.File.Name, int64(le.Line), int64(le.Column), inlined))
 
 	if inlined {
@@ -196,6 +204,10 @@ entry:
 				return
 			}
 			fileName := files[fileIndex]
+			if fileName == nil {
+				// Same as above: guard against ill-formed DWARF info.
+				return
+			}
 			line, _ := inlined.Val(dwarf.AttrCallLine).(int64)
 			col, _ := inlined.Val(dwarf.AttrCallColumn).(int64)
 			ret = append(ret, formatLine(prefix, fileName.Name, line, col,
