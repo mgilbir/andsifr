@@ -31,6 +31,9 @@ type (
 	}
 	// engine implements wasm.Engine.
 	engine struct {
+		// closed is set by Close: use-after-close must return an error instead
+		// of panicking on nil maps (C41 in codebase-audit-2026-10-18.md).
+		closed          bool
 		wazeroVersion   string
 		fileCache       filecache.Cache
 		compiledModules map[wasm.ModuleID]*compiledModuleWithCount
@@ -144,6 +147,9 @@ func NewEngine(ctx context.Context, _ api.CoreFeatures, fc filecache.Cache) wasm
 
 // CompileModule implements wasm.Engine.
 func (e *engine) CompileModule(ctx context.Context, module *wasm.Module, listeners []experimental.FunctionListener, ensureTermination bool) (err error) {
+	if e.isClosed() {
+		return errors.New("engine closed")
+	}
 	if wazevoapi.PerfMapEnabled {
 		wazevoapi.PerfMap.Lock()
 		defer wazevoapi.PerfMap.Unlock()
@@ -162,10 +168,6 @@ func (e *engine) CompileModule(ctx context.Context, module *wasm.Module, listene
 	if err != nil {
 		return err
 	}
-	if cm, err = e.addCompiledModule(module, cm); err != nil {
-		return err
-	}
-
 	if wazevoapi.DeterministicCompilationVerifierEnabled {
 		for i := 0; i < wazevoapi.DeterministicCompilationVerifyingIter; i++ {
 			_, err := e.compileModule(ctx, module, listeners, ensureTermination)
@@ -175,6 +177,10 @@ func (e *engine) CompileModule(ctx context.Context, module *wasm.Module, listene
 		}
 	}
 
+	// Attach the listeners before publishing the module: addCompiledModule
+	// makes the module visible to concurrent instantiations, and the listener
+	// slices must be complete (and stable) by then (C28 in
+	// codebase-audit-2026-10-18.md).
 	if len(listeners) > 0 {
 		cm.listeners = listeners
 		cm.listenerBeforeTrampolines = make([]*byte, len(module.TypeSection))
@@ -185,6 +191,10 @@ func (e *engine) CompileModule(ctx context.Context, module *wasm.Module, listene
 			cm.listenerBeforeTrampolines[i] = before
 			cm.listenerAfterTrampolines[i] = after
 		}
+	}
+
+	if _, err = e.addCompiledModule(module, cm); err != nil {
+		return err
 	}
 	return nil
 }
@@ -642,10 +652,18 @@ func (e *engine) compileHostModule(ctx context.Context, module *wasm.Module, lis
 	return cm, nil
 }
 
+// isClosed reports whether Close has been called.
+func (e *engine) isClosed() bool {
+	e.mux.RLock()
+	defer e.mux.RUnlock()
+	return e.closed
+}
+
 // Close implements wasm.Engine.
 func (e *engine) Close() (err error) {
 	e.mux.Lock()
 	defer e.mux.Unlock()
+	e.closed = true
 	e.sortedCompiledModules = nil
 	e.compiledModules = nil
 	e.sharedFunctions = nil

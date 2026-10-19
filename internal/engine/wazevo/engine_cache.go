@@ -44,9 +44,13 @@ func fileCacheKey(m *wasm.Module) (ret filecache.Key) {
 func (e *engine) addCompiledModule(module *wasm.Module, cm *compiledModule) (c *compiledModule, err error) {
 	c = e.addCompiledModuleToMemory(module, cm)
 	if !module.IsHostModule && e.fileCache != nil {
-		err = e.addCompiledModuleToCache(module, c)
+		// A cache write failure (e.g. read-only or full cache directory) must
+		// not fail CompileModule: the compiled module is already live in
+		// memory, so the entry is simply not cached (C27 in
+		// codebase-audit-2026-10-18.md).
+		_ = e.addCompiledModuleToCache(module, c)
 	}
-	return
+	return c, nil
 }
 
 func (e *engine) getCompiledModule(module *wasm.Module, listeners []experimental.FunctionListener, ensureTermination bool) (cm *compiledModule, ok bool, err error) {
@@ -72,11 +76,16 @@ func (e *engine) getCompiledModule(module *wasm.Module, listeners []experimental
 				cm.listenerAfterTrampolines[i] = after
 			}
 		}
-		e.addCompiledModuleToMemory(module, cm)
+		// Compile the entry preambles BEFORE publishing the module: a
+		// concurrent ExportedFunction would otherwise read
+		// entryPreamblesPtrs while it is still empty and panic with "index
+		// out of range" (C29 in codebase-audit-2026-10-18.md).
 		ssaBuilder := ssa.NewBuilder()
 		machine := newMachine()
 		be := backend.NewCompiler(context.Background(), machine, ssaBuilder)
 		cm.executables.compileEntryPreambles(module, machine, be)
+
+		e.addCompiledModuleToMemory(module, cm)
 
 		// Set the finalizer.
 		e.setFinalizer(cm.executables, executablesFinalizer)
@@ -87,6 +96,9 @@ func (e *engine) getCompiledModule(module *wasm.Module, listeners []experimental
 func (e *engine) addCompiledModuleToMemory(m *wasm.Module, cm *compiledModule) *compiledModule {
 	e.mux.Lock()
 	defer e.mux.Unlock()
+	if e.closed {
+		return cm // engine closed: the module is not registered (C41)
+	}
 	if c, ok := e.compiledModules[m.ID]; ok {
 		c.refCount++
 		return c.compiledModule
@@ -150,7 +162,13 @@ func (e *engine) getCompiledModuleFromCache(module *wasm.Module) (cm *compiledMo
 	// Note: cached.Close is ensured to be called in deserializeCodes.
 	cm, staleCache, err = deserializeCompiledModule(e.wazeroVersion, cached)
 	if err != nil {
+		// A corrupt or truncated entry must not permanently fail
+		// CompileModule: it would never be re-read successfully. Delete it
+		// and treat this as a cache miss so the module is recompiled (C26 in
+		// codebase-audit-2026-10-18.md).
+		_ = e.fileCache.Delete(fileCacheKey(module))
 		hit = false
+		err = nil
 		return
 	} else if staleCache {
 		return nil, false, e.fileCache.Delete(fileCacheKey(module))
@@ -159,6 +177,12 @@ func (e *engine) getCompiledModuleFromCache(module *wasm.Module) (cm *compiledMo
 }
 
 var magic = []byte{'W', 'A', 'Z', 'E', 'V', 'O'}
+
+// maxCachedFunctions bounds the function count read from a cache header,
+// which is not covered by the checksum. Real modules have far fewer functions
+// (wazero caps the function index space at 2^27, but a compiled module's
+// serialized offsets are proportional to its size, so 16M is generous).
+const maxCachedFunctions = 1 << 24
 
 func serializeCompiledModule(wazeroVersion string, cm *compiledModule) io.Reader {
 	buf := bytes.NewBuffer(nil)
@@ -247,6 +271,12 @@ func deserializeCompiledModule(wazeroVersion string, reader io.ReadCloser) (cm *
 	}
 
 	functionsNum := binary.LittleEndian.Uint32(header[len(header)-4:])
+	// The header is not covered by the checksum: reject absurd counts instead
+	// of allocating from untrusted values (C26 in
+	// codebase-audit-2026-10-18.md).
+	if functionsNum > maxCachedFunctions {
+		return nil, false, fmt.Errorf("compilationcache: invalid function count %d", functionsNum)
+	}
 	cm = &compiledModule{functionOffsets: make([]int, functionsNum), executables: &executables{}}
 
 	var eightBytes [8]byte
@@ -273,8 +303,17 @@ func deserializeCompiledModule(wazeroVersion string, reader io.ReadCloser) (cm *
 			return nil, false, err
 		}
 
-		_, err = io.ReadFull(reader, executable)
-		if err != nil {
+		// The segment is mmapped: every error path below must unmap it before
+		// returning, or the address space leaks per corrupt entry (C26 in
+		// codebase-audit-2026-10-18.md).
+		success := false
+		defer func() {
+			if !success {
+				_ = platform.MunmapCodeSegment(executable)
+			}
+		}()
+
+		if _, err = io.ReadFull(reader, executable); err != nil {
 			err = fmt.Errorf("compilationcache: error reading executable (len=%d): %v", executableLen, err)
 			return nil, false, err
 		}
@@ -289,6 +328,7 @@ func deserializeCompiledModule(wazeroVersion string, reader io.ReadCloser) (cm *
 		if err = platform.MprotectCodeSegment(executable); err != nil {
 			return nil, false, err
 		}
+		success = true
 		cm.executable = executable
 	}
 

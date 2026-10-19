@@ -329,13 +329,24 @@ func (m *moduleEngine) FunctionInstanceReference(funcIndex wasm.Index) wasm.Refe
 	executable := &p.executable[p.functionOffsets[localIndex]]
 	typeID := m.module.TypeIDs[m.module.Source.FunctionSection[localIndex]]
 
+	// Reuse the instance per function: a guest calling ref.func in a loop
+	// executed this trampoline on every iteration, appending a new
+	// functionInstance each time and leaking host memory without bound (C30
+	// in codebase-audit-2026-10-18.md). The instance contents are static per
+	// (module, funcIndex), so caching is sound.
+	for uint32(len(m.localFunctionInstances)) <= localIndex {
+		m.localFunctionInstances = append(m.localFunctionInstances, nil)
+	}
+	if lf := m.localFunctionInstances[localIndex]; lf != nil {
+		return uintptr(unsafe.Pointer(lf))
+	}
 	lf := &functionInstance{
 		executable:             executable,
 		moduleContextOpaquePtr: m.opaquePtr,
 		typeID:                 typeID,
 		indexInModule:          funcIndex,
 	}
-	m.localFunctionInstances = append(m.localFunctionInstances, lf)
+	m.localFunctionInstances[localIndex] = lf
 	return uintptr(unsafe.Pointer(lf))
 }
 
