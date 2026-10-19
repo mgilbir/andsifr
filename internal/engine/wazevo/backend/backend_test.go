@@ -993,11 +993,12 @@ L0 (SSA Block: blk0):
 	mov x130?, x2
 	mov x131?, x3
 	clz w132?, w130?
-	rbit w145?, w130?
-	clz w133?, w145?
-	ins v142?.d[0], x130?
-	cnt v143?.8b, v142?.8b
-	uaddlv h144?, v143?.8b
+	rbit w146?, w130?
+	clz w133?, w146?
+	uxtw x142?, w130?
+	ins v143?.d[0], x142?
+	cnt v144?.8b, v143?.8b
+	uaddlv h145?, v144?.8b
 	mov x134?, v144?.d[0]
 	clz x135?, x131?
 	rbit x141?, x131?
@@ -1021,7 +1022,8 @@ L0 (SSA Block: blk0):
 	clz w0, w2
 	rbit w8, w2
 	clz w1, w8
-	ins v8.d[0], x2
+	uxtw x8, w2
+	ins v8.d[0], x8
 	cnt v8.8b, v8.8b
 	uaddlv h8, v8.8b
 	mov x2, v8.d[0]
