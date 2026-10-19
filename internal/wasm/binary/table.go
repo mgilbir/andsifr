@@ -45,6 +45,13 @@ func decodeTable(r *bytes.Reader, enabledFeatures api.CoreFeatures, ret *wasm.Ta
 		ret.Type = wasm.ValueType(b)
 	}
 
+	// The table element type must be a reference type: any byte (e.g. i32 or
+	// v128) was previously accepted and materialised a nonsensical table (C24
+	// in codebase-audit-2026-10-18.md).
+	if !ret.Type.IsRef() {
+		return fmt.Errorf("invalid table element type: %s (0x%x)", wasm.ValueTypeName(ret.Type), b)
+	}
+
 	if ret.Type != wasm.RefTypeFuncref {
 		if err = enabledFeatures.RequireEnabled(api.CoreFeatureReferenceTypes); err != nil {
 			return fmt.Errorf("table type funcref is invalid: %w", err)

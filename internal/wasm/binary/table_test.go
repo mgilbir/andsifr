@@ -78,8 +78,16 @@ func TestDecodeTableType_Errors(t *testing.T) {
 		features    api.CoreFeatures
 	}{
 		{
-			name:        "not func ref",
+			// 0x50 is not a valid element type at all: previously any byte was
+			// accepted and only the feature check fired (C24).
+			name:        "not a reference type",
 			input:       []byte{0x50, 0x1, 0x80, 0x80, 0x4, 0},
+			expectedErr: "invalid table element type: unknown (0x50)",
+		},
+		{
+			// externref is a valid element type, but requires reference-types.
+			name:        "externref disabled",
+			input:       []byte{wasm.RefTypeExternref.Kind(), 0x1, 0x80, 0x80, 0x4, 0},
 			expectedErr: "table type funcref is invalid: feature \"reference-types\" is disabled",
 		},
 		{

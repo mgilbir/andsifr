@@ -24,7 +24,7 @@ func decodeFunctionType(enabledFeatures api.CoreFeatures, r *bytes.Reader, ret *
 		return fmt.Errorf("could not read parameter count: %w", err)
 	}
 
-	paramTypes, err := decodeValueTypes(r, paramCount)
+	paramTypes, err := decodeValueTypes(r, paramCount, enabledFeatures)
 	if err != nil {
 		return fmt.Errorf("could not read parameter types: %w", err)
 	}
@@ -41,7 +41,7 @@ func decodeFunctionType(enabledFeatures api.CoreFeatures, r *bytes.Reader, ret *
 		}
 	}
 
-	resultTypes, err := decodeValueTypes(r, resultCount)
+	resultTypes, err := decodeValueTypes(r, resultCount, enabledFeatures)
 	if err != nil {
 		return fmt.Errorf("could not read result types: %w", err)
 	}

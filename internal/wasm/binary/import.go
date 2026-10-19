@@ -41,7 +41,7 @@ func decodeImport(
 	case wasm.ExternTypeMemory:
 		ret.DescMem, err = decodeMemory(r, enabledFeatures, memorySizer, memoryLimitPages)
 	case wasm.ExternTypeGlobal:
-		ret.DescGlobal, err = decodeGlobalType(r)
+		ret.DescGlobal, err = decodeGlobalType(r, enabledFeatures)
 	case wasm.ExternTypeTag:
 		if err = enabledFeatures.RequireEnabled(api.CoreFeatureSIMD << 4); err != nil { // CoreFeaturesExceptionHandling
 			err = fmt.Errorf("tag imports require exception handling feature: %w", err)

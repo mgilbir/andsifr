@@ -7,11 +7,13 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/mgilbir/andsifr/api"
+	"github.com/mgilbir/andsifr/experimental"
 	"github.com/mgilbir/andsifr/internal/leb128"
 	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
-func decodeValueTypes(r *bytes.Reader, num uint32) ([]wasm.ValueType, error) {
+func decodeValueTypes(r *bytes.Reader, num uint32, enabledFeatures api.CoreFeatures) ([]wasm.ValueType, error) {
 	if num == 0 {
 		return nil, nil
 	}
@@ -28,6 +30,12 @@ func decodeValueTypes(r *bytes.Reader, num uint32) ([]wasm.ValueType, error) {
 			wasm.ValueTypeExnref.Kind():
 			ret = append(ret, wasm.ValueType(b))
 		case wasm.RefPrefixNullable, wasm.RefPrefixNonNullable:
+			// Concrete reference types are part of the typed function
+			// references proposal and must not be accepted under default
+			// features (C25 in codebase-audit-2026-10-18.md).
+			if err := enabledFeatures.RequireEnabled(experimental.CoreFeaturesTypedFunctionReferences); err != nil {
+				return nil, fmt.Errorf("concrete reference type invalid as %v", err)
+			}
 			vt, err := decodeRefType(r, b == wasm.RefPrefixNullable)
 			if err != nil {
 				return nil, err

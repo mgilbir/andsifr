@@ -12,7 +12,7 @@ import (
 //
 // See https://www.w3.org/TR/2019/REC-wasm-core-1-20191205/#binary-global
 func decodeGlobal(r *bytes.Reader, enabledFeatures api.CoreFeatures, ret *wasm.Global) (err error) {
-	ret.Type, err = decodeGlobalType(r)
+	ret.Type, err = decodeGlobalType(r, enabledFeatures)
 	if err != nil {
 		return err
 	}
@@ -24,8 +24,8 @@ func decodeGlobal(r *bytes.Reader, enabledFeatures api.CoreFeatures, ret *wasm.G
 // decodeGlobalType returns the wasm.GlobalType decoded with the WebAssembly 1.0 (20191205) Binary Format.
 //
 // See https://www.w3.org/TR/2019/REC-wasm-core-1-20191205/#binary-globaltype
-func decodeGlobalType(r *bytes.Reader) (wasm.GlobalType, error) {
-	vt, err := decodeValueTypes(r, 1)
+func decodeGlobalType(r *bytes.Reader, enabledFeatures api.CoreFeatures) (wasm.GlobalType, error) {
+	vt, err := decodeValueTypes(r, 1, enabledFeatures)
 	if err != nil {
 		return wasm.GlobalType{}, fmt.Errorf("read value type: %w", err)
 	}
