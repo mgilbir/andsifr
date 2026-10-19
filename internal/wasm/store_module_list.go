@@ -26,7 +26,13 @@ func (s *Store) deleteModule(m *ModuleInstance) error {
 	m.next = nil
 
 	if m.ModuleName != "" {
-		delete(s.nameToModule, m.ModuleName)
+		// Only delete the name entry when it actually points at this module:
+		// a failed duplicate-name registration calls Close on a module that
+		// was never registered, and unconditionally deleting would remove the
+		// live module's entry (C39 in codebase-audit-2026-10-18.md).
+		if cur, ok := s.nameToModule[m.ModuleName]; ok && cur == m {
+			delete(s.nameToModule, m.ModuleName)
+		}
 
 		// Shrink the map if it's allocated more than twice the size of the list
 		newCap := len(s.nameToModule)

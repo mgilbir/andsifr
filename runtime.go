@@ -225,6 +225,21 @@ func (r *runtime) Module(moduleName string) api.Module {
 	return m
 }
 
+// newCompiledModule builds a compiledModule recording the Runtime configuration
+// the module is compiled under, so that instantiating it in another Runtime can
+// refuse incompatible configurations (see runtime.Instantiate, audit finding C9).
+func (r *runtime) newCompiledModule(module *wasm.Module, ensureTermination bool) *compiledModule {
+	return &compiledModule{
+		module:                        module,
+		compiledEngine:                r.store.Engine,
+		compiledStore:                 r.store,
+		compiledMemoryLimitPages:      r.memoryLimitPages,
+		compiledMemoryCapacityFromMax: r.memoryCapacityFromMax,
+		compiledEnabledFeatures:       r.enabledFeatures,
+		compiledEnsureTermination:     ensureTermination,
+	}
+}
+
 // CompileModule implements Runtime.CompileModule
 func (r *runtime) CompileModule(ctx context.Context, binary []byte) (CompiledModule, error) {
 	if err := r.failIfClosed(); err != nil {
@@ -245,7 +260,7 @@ func (r *runtime) CompileModule(ctx context.Context, binary []byte) (CompiledMod
 	// TODO: lazy initialization of memory definition.
 	internal.BuildMemoryDefinitions()
 
-	c := &compiledModule{module: internal, compiledEngine: r.store.Engine, compiledStore: r.store}
+	c := r.newCompiledModule(internal, r.ensureTermination)
 
 	// typeIDs are static and compile-time known.
 	typeIDs, err := r.store.GetFunctionTypeIDs(internal.TypeSection)
@@ -258,7 +273,8 @@ func (r *runtime) CompileModule(ctx context.Context, binary []byte) (CompiledMod
 	if err != nil {
 		return nil, err
 	}
-	internal.AssignModuleID(binary, listeners, r.ensureTermination)
+	listenerFactory := ctx.Value(expctxkeys.FunctionListenerFactoryKey{})
+	internal.AssignModuleID(binary, listeners, listenerFactory, r.ensureTermination)
 	if err = r.store.Engine.CompileModule(ctx, internal, listeners, r.ensureTermination); err != nil {
 		return nil, err
 	}
@@ -328,6 +344,16 @@ func (r *runtime) InstantiateModule(
 		return nil, err
 	}
 
+	// The sys context may hold open resources (notably bound TCP listeners
+	// from WithSockListener): if instantiation fails after this point, close
+	// it so nothing leaks (C36 in codebase-audit-2026-10-18.md).
+	instantiated := false
+	defer func() {
+		if !instantiated {
+			_ = sysCtx.FS().Close()
+		}
+	}()
+
 	name := config.name
 	if !config.nameSet && code.module.NameSection != nil && code.module.NameSection.ModuleName != "" {
 		name = code.module.NameSection.ModuleName
@@ -339,27 +365,56 @@ func (r *runtime) InstantiateModule(
 	// resolution and call_indirect checks compare IDs from different spaces.
 	typeIDs := code.typeIDs
 	if code.compiledStore != r.store {
+		// Cross-Runtime instantiation: the compiled module baked in the
+		// compiling Runtime's memory limits, core features and termination
+		// checking, none of which can be re-applied here. Refuse rather than
+		// silently ignore this Runtime's configuration (C9 in
+		// codebase-audit-2026-10-18.md).
+		if r.memoryLimitPages != code.compiledMemoryLimitPages {
+			return nil, fmt.Errorf("module was compiled by another Runtime with WithMemoryLimitPages=%d, but this Runtime uses %d",
+				code.compiledMemoryLimitPages, r.memoryLimitPages)
+		}
+		if r.memoryCapacityFromMax != code.compiledMemoryCapacityFromMax {
+			return nil, fmt.Errorf("module was compiled by another Runtime with WithMemoryCapacityFromMax=%v, but this Runtime uses %v",
+				code.compiledMemoryCapacityFromMax, r.memoryCapacityFromMax)
+		}
+		if r.enabledFeatures != code.compiledEnabledFeatures {
+			return nil, fmt.Errorf("module was compiled by another Runtime with different core features: %v, but this Runtime uses %v",
+				code.compiledEnabledFeatures, r.enabledFeatures)
+		}
+		if r.ensureTermination != code.compiledEnsureTermination {
+			return nil, fmt.Errorf("module was compiled by another Runtime with WithCloseOnContextDone=%v, but this Runtime uses %v",
+				code.compiledEnsureTermination, r.ensureTermination)
+		}
 		if typeIDs, err = r.store.GetFunctionTypeIDs(code.module.TypeSection); err != nil {
 			return nil, err
 		}
 	}
-	mod, err = r.store.Instantiate(ctx, code.module, name, sysCtx, typeIDs)
+	// Refuse a pre-applied memory image when a ModuleConfig start function
+	// (e.g. the default _start) exists in this module: it runs after the
+	// data-skip decision point, so an image captured from a post-start
+	// instance would get its writes applied twice (audit finding C8).
+	willRunStartFunctions := false
+	for _, fn := range config.startFunctions {
+		if _, ok := code.module.Exports[fn]; ok {
+			willRunStartFunctions = true
+			break
+		}
+	}
+	// The hooks are passed into the store so they are attached before the
+	// module becomes visible (C81 in codebase-audit-2026-10-18.md).
+	closeNotifier, _ := ctx.Value(expctxkeys.CloseNotifierKey{}).(experimentalapi.CloseNotifier)
+	var codeCloser api.Closer
+	if code.closeWithModule {
+		codeCloser = code
+	}
+	mod, err = r.store.Instantiate(ctx, code.module, name, sysCtx, typeIDs, willRunStartFunctions, closeNotifier, codeCloser)
 	if err != nil {
 		// If there was an error, don't leak the compiled module.
 		if code.closeWithModule {
 			_ = code.Close(ctx) // don't overwrite the error
 		}
 		return nil, err
-	}
-
-	if closeNotifier, ok := ctx.Value(expctxkeys.CloseNotifierKey{}).(experimentalapi.CloseNotifier); ok {
-		mod.(*wasm.ModuleInstance).CloseNotifier = closeNotifier
-	}
-
-	// Attach the code closer so that anything afterward closes the compiled
-	// code when closing the module.
-	if code.closeWithModule {
-		mod.(*wasm.ModuleInstance).CodeCloser = code
 	}
 
 	// Now, invoke any start functions, failing at first error.
@@ -374,13 +429,20 @@ func (r *runtime) InstantiateModule(
 			if se, ok := err.(*sys.ExitError); ok {
 				if se.ExitCode() == 0 { // Don't err on success.
 					err = nil
+				} else {
+					// The module was closed above: returning it together with
+					// the error would hand the caller a closed module (C63 in
+					// codebase-audit-2026-10-18.md).
+					mod = nil
 				}
 				return // Don't wrap an exit error
 			}
 			err = fmt.Errorf("module[%s] function[%s] failed: %w", name, fn, err)
+			mod = nil // closed above; see C63
 			return
 		}
 	}
+	instantiated = true
 	return
 }
 

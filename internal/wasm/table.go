@@ -2,7 +2,6 @@ package wasm
 
 import (
 	"fmt"
-	"math"
 	"sync"
 
 	"github.com/mgilbir/andsifr/api"
@@ -171,7 +170,7 @@ func (m *Module) validateTable(enabledFeatures api.CoreFeatures, tables []Table,
 					return fmt.Errorf("%s[%d].init[%d] must be externref but was %s", SectionIDName(SectionIDElement), idx, ei, ValueTypeName(initType))
 				}
 			default:
-				if !isRefSubtypeOf(initType, elem.Type) && initType != ValueTypeFuncref {
+				if !isRefSubtypeOf(m, initType, elem.Type) && initType != ValueTypeFuncref {
 					return fmt.Errorf("%s[%d].init[%d] must be %s but was %s",
 						SectionIDName(SectionIDElement), idx, ei, ValueTypeName(elem.Type), ValueTypeName(initType))
 				}
@@ -184,7 +183,7 @@ func (m *Module) validateTable(enabledFeatures api.CoreFeatures, tables []Table,
 			}
 
 			t := tables[elem.TableIndex]
-			if !isRefSubtypeOf(elem.Type, t.Type) {
+			if !isRefSubtypeOf(m, elem.Type, t.Type) {
 				return fmt.Errorf("element type mismatch: table has %s but element has %s",
 					RefTypeName(t.Type), RefTypeName(elem.Type),
 				)
@@ -301,7 +300,11 @@ func (t *TableInstance) Grow(delta uint32, initialRef Reference) (currentLen uin
 	}
 
 	if newLen := int64(currentLen) + int64(delta); // adding as 64bit ints to avoid overflow.
-	newLen >= math.MaxUint32 || (t.Max != nil && newLen > int64(*t.Max)) {
+	newLen >= int64(MaximumTableIndex) || (t.Max != nil && newLen > int64(*t.Max)) {
+		// Refuse instead of attempting a ~32GB allocation that would fatally
+		// OOM the host: table.grow may fail arbitrarily per spec, and
+		// MaximumTableIndex is the same cap static table sizes are held to
+		// (C30 in codebase-audit-2026-10-18.md).
 		return 0xffffffff // = -1 in signed 32-bit integer.
 	}
 

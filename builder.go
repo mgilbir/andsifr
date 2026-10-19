@@ -324,7 +324,7 @@ func (b *hostModuleBuilder) Compile(ctx context.Context) (CompiledModule, error)
 		return nil, err
 	}
 
-	c := &compiledModule{module: module, compiledEngine: b.r.store.Engine}
+	c := b.r.newCompiledModule(module, false)
 	listeners, err := buildFunctionListeners(ctx, module)
 	if err != nil {
 		return nil, err

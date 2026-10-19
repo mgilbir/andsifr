@@ -300,7 +300,7 @@ func TestModule_Global(t *testing.T) {
 			r := NewRuntime(testCtx).(*runtime)
 			defer r.Close(testCtx)
 
-			code := &compiledModule{module: tc.module}
+			code := r.newCompiledModule(tc.module, false)
 
 			err := r.store.Engine.CompileModule(testCtx, code.module, nil, false)
 			require.NoError(t, err)

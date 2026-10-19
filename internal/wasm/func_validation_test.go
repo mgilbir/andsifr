@@ -2329,7 +2329,10 @@ func TestModule_funcValidation_RefTypes(t *testing.T) {
 				OpcodeRefFunc, 100,
 				OpcodeDrop, OpcodeEnd,
 			},
-			expectedErr: `undeclared function index 100 for ref.func`,
+			// 100 is out of range of the function index space, which is now
+			// rejected before the declared check (C23: it used to panic via
+			// functions[index] when only an elem segment "declared" it).
+			expectedErr: `unknown function index 100 for ref.func`,
 		},
 		{
 			name:                    "ref.func",

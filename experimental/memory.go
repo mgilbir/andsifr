@@ -55,6 +55,10 @@ type LinearMemory interface {
 // Implementations must record the ID of the module whose post-initialization
 // memory the image was built from, and return true only for that exact ID, so
 // that an image can never be applied to a different (e.g. updated) module.
+// When the runtime refuses the skip (mismatched ID, a start section, or an
+// active data offset depending on an imported global), it clears the returned
+// buffer before copying the active data segments: a refused image must not
+// leak any of its contents into the instance.
 //
 // The skip is additionally refused by the runtime when any active data
 // segment offset depends on an imported global, since then the segment

@@ -108,7 +108,7 @@ func TestEncodeImport(t *testing.T) {
 				Type:      wasm.ExternTypeTable,
 				Module:    "my",
 				Name:      "table",
-				DescTable: wasm.Table{Min: 1, Max: ptrOfUint32(2)},
+				DescTable: wasm.Table{Type: wasm.RefTypeFuncref, Min: 1, Max: ptrOfUint32(2)},
 			},
 			expected: []byte{
 				0x02, 'm', 'y',

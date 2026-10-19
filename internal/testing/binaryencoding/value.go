@@ -32,7 +32,21 @@ func EncodeValTypes(vt []wasm.ValueType) []byte {
 	// Encode value types as their Kind bytes
 	count := leb128.EncodeUint32(uint32(len(vt)))
 	for _, v := range vt {
-		count = append(count, v.Kind())
+		count = append(count, EncodeValueType(v)...)
 	}
 	return count
+}
+
+// EncodeValueType returns the binary encoding of a single value type, including
+// concrete reference types, which are encoded with the 0x63/0x64 prefix
+// followed by the type index as a signed LEB128 heap type.
+func EncodeValueType(vt wasm.ValueType) []byte {
+	if vt.IsConcreteRef() {
+		prefix := byte(wasm.RefPrefixNullable)
+		if !vt.IsNullable() {
+			prefix = wasm.RefPrefixNonNullable
+		}
+		return append([]byte{prefix}, leb128.EncodeInt32(int32(vt.TypeIndex()))...)
+	}
+	return []byte{vt.Kind()}
 }

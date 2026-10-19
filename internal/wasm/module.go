@@ -211,7 +211,12 @@ const (
 
 // AssignModuleID calculates a sha256 checksum on `wasm` and other args, and set Module.ID to the result.
 // See the doc on Module.ID on what it's used for.
-func (m *Module) AssignModuleID(wasm []byte, listeners []experimental.FunctionListener, withEnsureTermination bool) {
+//
+// listenerFactory (may be nil) participates in the identity: two compiles of
+// the same binary with different listener factories must not share a compiled
+// module, or the second would run the first factory's listeners (C34 in
+// codebase-audit-2026-10-18.md).
+func (m *Module) AssignModuleID(wasm []byte, listeners []experimental.FunctionListener, listenerFactory any, withEnsureTermination bool) {
 	h := sha256.New()
 	h.Write(wasm)
 	// Use the pre-allocated space backed by m.ID below.
@@ -221,6 +226,11 @@ func (m *Module) AssignModuleID(wasm []byte, listeners []experimental.FunctionLi
 		binary.LittleEndian.PutUint32(m.ID[:], uint32(i))
 		m.ID[4] = boolToByte(l != nil)
 		h.Write(m.ID[:5])
+	}
+	if listenerFactory != nil {
+		// Per-process pointer identity: the same factory yields the same ID
+		// (cache hits still work); a different factory recompiles.
+		fmt.Fprintf(h, "factory=%p", listenerFactory)
 	}
 	// Write the flag of ensureTermination to the checksum.
 	m.ID[0] = boolToByte(withEnsureTermination)
@@ -317,6 +327,14 @@ func (m *Module) Validate(enabledFeatures api.CoreFeatures) error {
 		return err
 	}
 
+	// Tags are validated before functions: throw/try_table validation indexes
+	// the tag section, and an out-of-range tag type index would otherwise
+	// panic there instead of failing validation (C23 in
+	// codebase-audit-2026-10-18.md).
+	if err = m.validateTagSection(); err != nil {
+		return err
+	}
+
 	if m.CodeSection != nil {
 		if err = m.validateFunctions(enabledFeatures, functions, globals, memory, tables, tags, MaximumFunctionIndex); err != nil {
 			return err
@@ -328,10 +346,6 @@ func (m *Module) Validate(enabledFeatures api.CoreFeatures) error {
 	}
 
 	if err = m.validateDataCountSection(); err != nil {
-		return err
-	}
-
-	if err = m.validateTagSection(); err != nil {
 		return err
 	}
 	return nil
@@ -671,7 +685,7 @@ func (m *Module) validateConstExpression(globals []GlobalType, numFuncs uint32, 
 			typ = ValueTypeConcreteRef(typeIndex, false)
 		}
 	}
-	if !isRefSubtypeOf(typ, expectedType) {
+	if !isRefSubtypeOf(m, typ, expectedType) {
 		return fmt.Errorf("const expression type mismatch expected %s but got %s", ValueTypeName(expectedType), ValueTypeName(typ))
 	}
 	return nil
@@ -723,6 +737,13 @@ func (m *Module) resolveConstExprGlobalType(enabledFeatures api.CoreFeatures, se
 				continue
 			}
 			if idx == cur {
+				if imp.DescGlobal.Mutable {
+					// Constant expressions may only read immutable globals;
+					// allowing mutable ones made data offsets depend on
+					// instantiation order and diverge between engines (C45
+					// in codebase-audit-2026-10-18.md).
+					return 0, fmt.Errorf("%s[%d] (global.get %d): constant expression cannot reference a mutable global", SectionIDName(sectionID), sectionIdx, idx)
+				}
 				return imp.DescGlobal.ValType, nil
 			}
 			cur++
@@ -750,6 +771,11 @@ func (m *Module) resolveConstExprGlobalType(enabledFeatures api.CoreFeatures, se
 	// Bounds check:
 	if idx >= uint32(len(m.GlobalSection)) {
 		return 0, fmt.Errorf("%s[%d] (global.get %d): out of range of initialized globals", SectionIDName(sectionID), sectionIdx, idx)
+	}
+
+	if m.GlobalSection[idx].Type.Mutable {
+		// See the imported-global case above (C45).
+		return 0, fmt.Errorf("%s[%d] (global.get %d): constant expression cannot reference a mutable global", SectionIDName(sectionID), sectionIdx, idx)
 	}
 
 	return m.GlobalSection[idx].Type.ValType, nil
@@ -1311,8 +1337,13 @@ func isReferenceValueType(vt ValueType) bool {
 }
 
 // isRefSubtypeOf returns true if actual is a subtype of (or equal to) expected.
-// Non-nullable is a subtype of nullable. Concrete function refs are subtypes of funcref.
-func isRefSubtypeOf(actual, expected ValueType) bool {
+// Non-nullable is a subtype of nullable. Concrete function refs are subtypes of
+// funcref. Concrete-vs-concrete requires the referenced types to be
+// structurally equivalent (iso-recursive typing): the same type may appear at
+// different indexes within a module, so index equality alone is unsound — it
+// made (ref $a) a subtype of any (ref $b), letting call_ref execute under the
+// wrong signature (C12 in codebase-audit-2026-10-18.md).
+func isRefSubtypeOf(m *Module, actual, expected ValueType) bool {
 	if actual == expected {
 		return true
 	}
@@ -1320,8 +1351,19 @@ func isRefSubtypeOf(actual, expected ValueType) bool {
 	if actual.AsNullable() == expected.AsNullable() && expected.IsNullable() {
 		return true
 	}
-	// Concrete function ref is subtype of (abstract) funcref (nullable or non-nullable).
-	if actual.IsConcreteRef() && expected.Kind() == ValueTypeFuncref.Kind() {
+	if actual.IsConcreteRef() && expected.IsConcreteRef() {
+		// Same-index cases are covered by the two rules above. Otherwise the
+		// referenced types must be structurally equivalent, and actual must
+		// not be wider (nullable) than expected.
+		if actual.IsNullable() && !expected.IsNullable() {
+			return false
+		}
+		return m.structurallyEquivalentTypes(actual.TypeIndex(), expected.TypeIndex())
+	}
+	// Concrete function ref is subtype of (abstract) funcref (nullable or
+	// non-nullable). Note: expected must NOT itself be a concrete ref — that
+	// case is handled above.
+	if actual.IsConcreteRef() && !expected.IsConcreteRef() && expected.Kind() == ValueTypeFuncref.Kind() {
 		if !actual.IsNullable() || expected.IsNullable() {
 			return true
 		}
@@ -1330,8 +1372,144 @@ func isRefSubtypeOf(actual, expected ValueType) bool {
 }
 
 // areRefTypesCompatible returns true if either type is a subtype of the other.
-func areRefTypesCompatible(a, b ValueType) bool {
-	return isRefSubtypeOf(a, b) || isRefSubtypeOf(b, a)
+func areRefTypesCompatible(m *Module, a, b ValueType) bool {
+	return isRefSubtypeOf(m, a, b) || isRefSubtypeOf(m, b, a)
+}
+
+// isRefSubtypeOfAcrossModules is isRefSubtypeOf for value types originating
+// from two different modules: actual's concrete reference indexes resolve in
+// ma's type section and expected's in me's. Note that the `actual == expected`
+// fast path of isRefSubtypeOf is not valid here: equal index bits in different
+// modules may denote different types (C13 in codebase-audit-2026-10-18.md).
+func isRefSubtypeOfAcrossModules(ma, me *Module, actual, expected ValueType) bool {
+	if actual.IsConcreteRef() || expected.IsConcreteRef() {
+		if actual.IsConcreteRef() && expected.IsConcreteRef() {
+			if actual.IsNullable() && !expected.IsNullable() {
+				return false
+			}
+			return structurallyEquivalentTypesAcrossModules(ma, me, actual.TypeIndex(), expected.TypeIndex())
+		}
+		// One concrete, one abstract: concrete function ref is a subtype of
+		// (abstract) funcref, subject to the nullability direction.
+		if actual.IsConcreteRef() && expected.Kind() == ValueTypeFuncref.Kind() {
+			if !actual.IsNullable() || expected.IsNullable() {
+				return true
+			}
+		}
+		return false
+	}
+	return isRefSubtypeOf(ma, actual, expected)
+}
+
+// structurallyEquivalentTypes reports whether the function types at type
+// section indexes x and y are structurally equivalent (see
+// structurallyEquivalentTypesAcrossModules).
+func (m *Module) structurallyEquivalentTypes(x, y uint32) bool {
+	return structurallyEquivalentTypesAcrossModules(m, m, x, y)
+}
+
+// structurallyEquivalentTypesAcrossModules reports whether the function types
+// at type section indexes x in mx and y in my (possibly different modules) are
+// structurally equivalent after substituting concrete references with the
+// types they reference (iso-recursive typing: two types are equivalent when
+// their possibly-infinite unfoldings are equal).
+func structurallyEquivalentTypesAcrossModules(mx, my *Module, x, y uint32) bool {
+	if mx == nil || my == nil || int(x) >= len(mx.TypeSection) || int(y) >= len(my.TypeSection) {
+		return false
+	}
+	c := typeEquivalenceCtx{mx: mx, my: my, visited: map[[2]uint32]struct{}{}}
+	return c.functionTypesEquivalent(x, y)
+}
+
+// valueTypesEquivalentAcrossModules reports whether two value types from
+// different modules are equivalent; concrete reference indexes are resolved
+// structurally against their own module's type section.
+func valueTypesEquivalentAcrossModules(mx, my *Module, x, y ValueType) bool {
+	if x.IsConcreteRef() || y.IsConcreteRef() {
+		if mx == nil || my == nil {
+			return false
+		}
+		c := typeEquivalenceCtx{mx: mx, my: my, visited: map[[2]uint32]struct{}{}}
+		return c.valueTypesEquivalent(x, y)
+	}
+	return x == y
+}
+
+// typeEquivalenceCtx carries the state of one structural type-equivalence
+// comparison across (possibly two different) modules' type sections. visited
+// implements coinductive cycle handling at rec-group granularity: a group pair
+// already under comparison is assumed equivalent, which is sound for
+// iso-recursive types (their infinite unfoldings are equal by construction).
+type typeEquivalenceCtx struct {
+	mx, my  *Module
+	visited map[[2]uint32]struct{}
+}
+
+// groupOf returns the type section index of the first member of the rec group
+// that type index t belongs to, and the group's size. Types outside an
+// explicit rec group form a singleton group.
+func (c *typeEquivalenceCtx) groupOf(module *Module, t uint32) (start, size uint32) {
+	size = uint32(module.TypeSection[t].RecGroupSize)
+	if size <= 1 {
+		return t, 1
+	}
+	return t - uint32(module.TypeSection[t].RecGroupPosition), size
+}
+
+// functionTypesEquivalent reports whether the types at indexes x and y are
+// equivalent. Equivalence is structural across different type section indexes,
+// but preserves positional identity within rec groups: two members of a rec
+// group are distinct types even when structurally identical (GC proposal type
+// identity; see tag.wast assert_unlinkable).
+func (c *typeEquivalenceCtx) functionTypesEquivalent(x, y uint32) bool {
+	if x == y && c.mx == c.my {
+		return true
+	}
+	gxs, gxsSize := c.groupOf(c.mx, x)
+	gys, gysSize := c.groupOf(c.my, y)
+	if gxsSize != gysSize {
+		return false
+	}
+	if x-gxs != y-gys {
+		return false
+	}
+	key := [2]uint32{gxs, gys}
+	if _, ok := c.visited[key]; ok {
+		// Coinductive assumption: this group pair is already being compared
+		// higher in the unfolding, so assume equivalence.
+		return true
+	}
+	c.visited[key] = struct{}{}
+	for i := uint32(0); i < gxsSize; i++ {
+		ftx := &c.mx.TypeSection[gxs+i]
+		fty := &c.my.TypeSection[gys+i]
+		if len(ftx.Params) != len(fty.Params) || len(ftx.Results) != len(fty.Results) {
+			return false
+		}
+		for j := range ftx.Params {
+			if !c.valueTypesEquivalent(ftx.Params[j], fty.Params[j]) {
+				return false
+			}
+		}
+		for j := range ftx.Results {
+			if !c.valueTypesEquivalent(ftx.Results[j], fty.Results[j]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// valueTypesEquivalent reports whether two value types are equivalent in this
+// comparison context.
+func (c *typeEquivalenceCtx) valueTypesEquivalent(x, y ValueType) bool {
+	if x.IsConcreteRef() && y.IsConcreteRef() {
+		if x.IsNullable() != y.IsNullable() {
+			return false
+		}
+		return c.functionTypesEquivalent(x.TypeIndex(), y.TypeIndex())
+	}
+	return x == y
 }
 
 // ExternType is an alias of api.ExternType defined to simplify imports.

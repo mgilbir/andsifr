@@ -82,7 +82,7 @@ func TestModuleInstance_Memory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStore()
 
-			instance, err := s.Instantiate(testCtx, tc.input, "test", nil, nil)
+			instance, err := s.Instantiate(testCtx, tc.input, "test", nil, nil, false, nil, nil)
 			require.NoError(t, err)
 
 			mem := instance.ExportedMemory("memory")
@@ -106,7 +106,7 @@ func TestStore_Instantiate(t *testing.T) {
 	require.NoError(t, err)
 
 	sysCtx := sys.DefaultContext(nil)
-	mod, err := s.Instantiate(testCtx, m, "bar", sysCtx, []FunctionTypeID{0})
+	mod, err := s.Instantiate(testCtx, m, "bar", sysCtx, []FunctionTypeID{0}, false, nil, nil)
 	require.NoError(t, err)
 	defer mod.Close(testCtx)
 
@@ -147,7 +147,7 @@ func TestStore_CloseWithExitCode(t *testing.T) {
 				CodeSection:               []Code{{Body: []byte{OpcodeEnd}}},
 				Exports:                   map[string]*Export{"fn": {Type: ExternTypeFunc, Name: "fn"}},
 				FunctionDefinitionSection: []FunctionDefinition{{Functype: &v_v}},
-			}, importedModuleName, nil, []FunctionTypeID{0})
+			}, importedModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 			require.NoError(t, err)
 
 			m2, err := s.Instantiate(testCtx, &Module{
@@ -158,7 +158,7 @@ func TestStore_CloseWithExitCode(t *testing.T) {
 				MemoryDefinitionSection: []MemoryDefinition{{}},
 				GlobalSection:           []Global{{Type: GlobalType{}, Init: NewConstantExpressionFromI32(1)}},
 				TableSection:            []Table{{Min: 10}},
-			}, importingModuleName, nil, []FunctionTypeID{0})
+			}, importingModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 			require.NoError(t, err)
 
 			if tc.testClosed {
@@ -190,7 +190,7 @@ func TestStore_hammer(t *testing.T) {
 	require.NoError(t, err)
 
 	s := newStore()
-	imported, err := s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0})
+	imported, err := s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 	require.NoError(t, err)
 
 	_, ok := s.nameToModule[imported.Name()]
@@ -222,7 +222,7 @@ func TestStore_hammer(t *testing.T) {
 		N = 100
 	}
 	hammer.NewHammer(t, P, N).Run(func(p, n int) {
-		mod, instantiateErr := s.Instantiate(testCtx, importingModule, fmt.Sprintf("%d:%d", p, n), sys.DefaultContext(nil), []FunctionTypeID{0})
+		mod, instantiateErr := s.Instantiate(testCtx, importingModule, fmt.Sprintf("%d:%d", p, n), sys.DefaultContext(nil), []FunctionTypeID{0}, false, nil, nil)
 		require.NoError(t, instantiateErr)
 		require.NoError(t, mod.Close(testCtx))
 	}, nil)
@@ -249,7 +249,7 @@ func TestStore_hammer_close(t *testing.T) {
 	require.NoError(t, err)
 
 	s := newStore()
-	imported, err := s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0})
+	imported, err := s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 	require.NoError(t, err)
 
 	_, ok := s.nameToModule[imported.Name()]
@@ -275,7 +275,7 @@ func TestStore_hammer_close(t *testing.T) {
 	const instCount = 10000
 	instances := make([]api.Module, instCount)
 	for i := 0; i < instCount; i++ {
-		mod, instantiateErr := s.Instantiate(testCtx, importingModule, strconv.Itoa(i), sys.DefaultContext(nil), []FunctionTypeID{0})
+		mod, instantiateErr := s.Instantiate(testCtx, importingModule, strconv.Itoa(i), sys.DefaultContext(nil), []FunctionTypeID{0}, false, nil, nil)
 		require.NoError(t, instantiateErr)
 		instances[i] = mod
 	}
@@ -314,17 +314,17 @@ func TestStore_Instantiate_Errors(t *testing.T) {
 
 	t.Run("Fails if module name already in use", func(t *testing.T) {
 		s := newStore()
-		_, err = s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0})
+		_, err = s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 		require.NoError(t, err)
 
 		// Trying to register it again should fail
-		_, err = s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0})
+		_, err = s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 		require.EqualError(t, err, "module[imported] has already been instantiated")
 	})
 
 	t.Run("fail resolve import", func(t *testing.T) {
 		s := newStore()
-		_, err = s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0})
+		_, err = s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 		require.NoError(t, err)
 
 		hm := s.nameToModule[importedModuleName]
@@ -342,14 +342,14 @@ func TestStore_Instantiate_Errors(t *testing.T) {
 				importedModuleName: {{Type: ExternTypeFunc, Module: importedModuleName, Name: "fn", DescFunc: 0}},
 				"non-exist":        {{Name: "fn", DescFunc: 0}},
 			},
-		}, importingModuleName, nil, []FunctionTypeID{0})
+		}, importingModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 		require.EqualError(t, err, "module[non-exist] not instantiated")
 	})
 
 	t.Run("creating engine failed", func(t *testing.T) {
 		s := newStore()
 
-		_, err = s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0})
+		_, err = s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 		require.NoError(t, err)
 
 		hm := s.nameToModule[importedModuleName]
@@ -371,7 +371,7 @@ func TestStore_Instantiate_Errors(t *testing.T) {
 			},
 		}
 
-		_, err = s.Instantiate(testCtx, importingModule, importingModuleName, nil, []FunctionTypeID{0})
+		_, err = s.Instantiate(testCtx, importingModule, importingModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 		require.EqualError(t, err, "some engine creation error")
 	})
 
@@ -380,7 +380,7 @@ func TestStore_Instantiate_Errors(t *testing.T) {
 		engine := s.Engine.(*mockEngine)
 		engine.callFailIndex = 1
 
-		_, err = s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0})
+		_, err = s.Instantiate(testCtx, m, importedModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 		require.NoError(t, err)
 
 		hm := s.nameToModule[importedModuleName]
@@ -398,7 +398,7 @@ func TestStore_Instantiate_Errors(t *testing.T) {
 			},
 		}
 
-		_, err = s.Instantiate(testCtx, importingModule, importingModuleName, nil, []FunctionTypeID{0})
+		_, err = s.Instantiate(testCtx, importingModule, importingModuleName, nil, []FunctionTypeID{0}, false, nil, nil)
 		require.EqualError(t, err, "start function[1] failed: call failed")
 	})
 }
@@ -1022,6 +1022,12 @@ func TestModuleInstance_applyData(t *testing.T) {
 		require.EqualError(t, err, "data[0]: out of bounds memory access")
 
 		// An image built from a different module never skips.
+		// The image holds contents from another module's post-initialization
+		// memory (e.g. its start function's writes); a refused image must not
+		// survive into the new instance (audit finding C7).
+		imageContents := []byte{0xde, 0xad, 0xbe, 0xef, 0xfe, 0xed, 0xfa, 0xce, 0xba, 0xad}
+		copy(buf, imageContents)
+
 		otherModule := &ModuleInstance{
 			Source: &Module{ID: ModuleID{4, 5, 6}},
 			MemoryInstance: &MemoryInstance{
@@ -1033,7 +1039,31 @@ func TestModuleInstance_applyData(t *testing.T) {
 			{OffsetExpression: NewConstantExpressionFromI32(0), Init: []byte{0xa, 0xf}},
 		})
 		require.NoError(t, err)
-		require.Equal(t, []byte{0xa, 0xf}, otherModule.MemoryInstance.Buffer[:2])
+		// The image is refused and neutralised, then the data segment is copied:
+		// no other image contents survive.
+		exp := make([]byte, 10)
+		copy(exp, []byte{0xa, 0xf})
+		require.Equal(t, exp, otherModule.MemoryInstance.Buffer)
+
+		// A module whose ModuleConfig will run a start function (e.g. the
+		// default _start) never skips either: the image may have been captured
+		// post-start, and the start's writes would be applied twice (audit
+		// finding C8). The image must also be neutralised.
+		configStart := &ModuleInstance{
+			Source:                &Module{ID: imageID},
+			willRunStartFunctions: true,
+			MemoryInstance: &MemoryInstance{
+				Buffer:    buf,
+				expBuffer: preappliedLinearMemory{buf: buf, forID: imageID},
+			},
+		}
+		err = configStart.applyData([]DataSegment{
+			{OffsetExpression: NewConstantExpressionFromI32(0), Init: []byte{0xa, 0xf}},
+		})
+		require.NoError(t, err)
+		expConfigStart := make([]byte, 10)
+		copy(expConfigStart, []byte{0xa, 0xf})
+		require.Equal(t, expConfigStart, configStart.MemoryInstance.Buffer)
 
 		// A segment whose offset depends on an (imported) global never skips:
 		// its placement is not determined by the module identity alone.

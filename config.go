@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"math"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/mgilbir/andsifr/api"
@@ -368,9 +369,21 @@ type compiledModule struct {
 	// A CompiledModule instantiated in a different Runtime (e.g. sharing a
 	// CompilationCache) must re-intern its typeIDs in that Runtime's store.
 	compiledStore *wasm.Store
+	// compiledMemoryLimitPages, compiledMemoryCapacityFromMax,
+	// compiledEnabledFeatures and compiledEnsureTermination record the
+	// Runtime configuration the module was compiled under. Some of it is
+	// baked into the compiled module and cannot be re-applied at
+	// instantiation time, so instantiating in another Runtime is refused when
+	// they differ (C9 in codebase-audit-2026-10-18.md).
+	compiledMemoryLimitPages      uint32
+	compiledMemoryCapacityFromMax bool
+	compiledEnabledFeatures       api.CoreFeatures
+	compiledEnsureTermination     bool
 	// closeWithModule prevents leaking compiled code when a module is compiled implicitly.
 	closeWithModule bool
-	typeIDs         []wasm.FunctionTypeID
+	// closeOnce guards Close so it is idempotent (see C37).
+	closeOnce sync.Once
+	typeIDs   []wasm.FunctionTypeID
 }
 
 // Name implements CompiledModule.Name
@@ -383,7 +396,13 @@ func (c *compiledModule) Name() (moduleName string) {
 
 // Close implements CompiledModule.Close
 func (c *compiledModule) Close(context.Context) error {
-	c.compiledEngine.DeleteCompiledModule(c.module)
+	// Close must be idempotent: each call decrements the compiled module's
+	// ref count, which is shared by every handle of the same module ID (e.g.
+	// across Runtimes sharing a cache), so a double Close could release code
+	// still in use (C37 in codebase-audit-2026-10-18.md).
+	c.closeOnce.Do(func() {
+		c.compiledEngine.DeleteCompiledModule(c.module)
+	})
 	// It is possible the underlying may need to return an error later, but in any case this matches api.Module.Close.
 	return nil
 }

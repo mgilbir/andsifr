@@ -33,6 +33,18 @@ type (
 	//
 	// See https://www.w3.org/TR/2019/REC-wasm-core-1-20191205/#store%E2%91%A0
 	Store struct {
+		// exceptionRoots keeps every thrown exception reachable from the Go
+		// heap. Guest-held exnrefs are raw pointers (in locals, tables or
+		// globals) that the Go GC cannot see; without a root, an exception
+		// thrown earlier in the store's lifetime can be collected and
+		// throw_ref would read freed memory (C15 in
+		// codebase-audit-2026-10-18.md). Rooting at the store (rather than the
+		// throwing module) covers exceptions stored in other instances' tables
+		// via imported tags. The trade-off is that exceptions are retained for
+		// the store's lifetime.
+		exceptionRootsMux sync.Mutex
+		exceptionRoots    []*Exception
+
 		// moduleList ensures modules are closed in reverse initialization order.
 		moduleList *ModuleInstance // guarded by mux
 
@@ -123,6 +135,26 @@ type (
 		prev, next *ModuleInstance
 		// Source is a pointer to the Module from which this ModuleInstance derives.
 		Source *Module
+
+		// willRunStartFunctions records whether the embedder's ModuleConfig will
+		// invoke start functions (e.g. the default _start) after instantiation.
+		// A pre-applied memory image must be refused when they will, because an
+		// image captured from a post-start instance would get the start's writes
+		// applied a second time (audit finding C8).
+		willRunStartFunctions bool
+
+		// executingCalls counts guest executions in flight on this module.
+		// Together with freeMux/freePending it defers the Free of an
+		// allocator-backed linear memory until no guest code is executing, so a
+		// concurrent Close cannot free memory still in use by the JIT or the
+		// interpreter (audit finding C11).
+		executingCalls atomic.Int64
+		// freePending is set when a Close wanted to free the allocator-backed
+		// memory but guest code was executing; the last endExecution frees it.
+		freePending atomic.Bool
+		// freeMux guards the deferred free of expBuffer against racing with the
+		// immediate free in ensureResourcesClosed.
+		freeMux sync.Mutex
 
 		// CloseNotifier is an experimental hook called once on close.
 		CloseNotifier experimental.CloseNotifier
@@ -280,19 +312,31 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 	// only global.get imported globals, so such a segment's placement depends
 	// on the import environment rather than on the module identity alone.
 	//
-	// It is also refused when the module has a start section. A pre-applied
-	// image must be bit-identical to normal-instantiation memory at the point
-	// the copy would happen — after data segments, *before* the start function.
-	// The start function runs on every instance, so an image captured from an
-	// already-started instance has different contents (the start's writes are
-	// baked in and would then be applied a second time). Refusing the skip here
-	// keeps the feature safe-by-construction for start-free modules.
+	// It is also refused when the module has a start section, or when the
+	// embedder's ModuleConfig will run start functions (e.g. the default
+	// _start). A pre-applied image must be bit-identical to normal-instantiation
+	// memory at the point the copy would happen — after data segments, *before*
+	// any start function. The start function runs on every instance, so an image
+	// captured from an already-started instance has different contents (the
+	// start's writes are baked in and would then be applied a second time).
+	// Refusing the skip here keeps the feature safe-by-construction for
+	// start-free modules.
 	skipCopy := false
 	if mem := m.MemoryInstance; mem != nil && mem.expBuffer != nil && !mem.Shared {
-		if p, ok := mem.expBuffer.(experimental.MemoryWithPreappliedData); ok &&
-			m.Source.StartSection == nil &&
-			!hasImportDependentDataOffsets(data) && p.PreappliedDataFor(m.Source.ID) {
-			skipCopy = true
+		if p, ok := mem.expBuffer.(experimental.MemoryWithPreappliedData); ok {
+			if !hasImportDependentDataOffsets(data) && m.Source.StartSection == nil &&
+				!m.willRunStartFunctions && p.PreappliedDataFor(m.Source.ID) {
+				skipCopy = true
+			} else {
+				// The image was refused (module ID mismatch, import-dependent offsets
+				// or a start section). The allocator may already have handed us
+				// contents captured from another module's post-initialization
+				// memory, so neutralise it: only zeroed memory plus the data
+				// segments copied below is a valid starting state. Without this,
+				// a mismatched image would silently leak into this instance (C7 in
+				// codebase-audit-2026-10-18.md).
+				clear(mem.Buffer)
+			}
 		}
 	}
 	for i := range data {
@@ -372,9 +416,32 @@ func (s *Store) Instantiate(
 	name string,
 	sys *internalsys.Context,
 	typeIDs []FunctionTypeID,
+	willRunStartFunctions bool,
+	closeNotifier experimental.CloseNotifier,
+	codeCloser api.Closer,
 ) (*ModuleInstance, error) {
+	// Check the name is free before running any side effects (data segments,
+	// start function): a duplicate-name instantiate must not execute the
+	// module's start function only to fail registration afterwards (C39 in
+	// codebase-audit-2026-10-18.md). registerModule re-checks under the lock.
+	if name != "" {
+		s.mux.Lock()
+		_, exists := s.nameToModule[name]
+		s.mux.Unlock()
+		if exists {
+			return nil, fmt.Errorf("module[%s] has already been instantiated", name)
+		}
+	}
+
 	// Instantiate the module and add it to the store so that other modules can import it.
-	m, err := s.instantiate(ctx, module, name, sys, typeIDs)
+	m, err := s.instantiate(ctx, module, name, sys, typeIDs, willRunStartFunctions)
+	if err == nil {
+		// Attach the hooks before the module becomes visible via
+		// registerModule, so a concurrent Module(name)+Close cannot miss them
+		// (C81 in codebase-audit-2026-10-18.md).
+		m.CloseNotifier = closeNotifier
+		m.CodeCloser = codeCloser
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -393,8 +460,9 @@ func (s *Store) instantiate(
 	name string,
 	sysCtx *internalsys.Context,
 	typeIDs []FunctionTypeID,
+	willRunStartFunctions bool,
 ) (m *ModuleInstance, err error) {
-	m = &ModuleInstance{ModuleName: name, TypeIDs: typeIDs, Sys: sysCtx, s: s, Source: module}
+	m = &ModuleInstance{ModuleName: name, TypeIDs: typeIDs, Sys: sysCtx, s: s, Source: module, willRunStartFunctions: willRunStartFunctions}
 
 	m.Tables = make([]*TableInstance, int(module.ImportTableCount)+len(module.TableSection))
 	m.Globals = make([]*GlobalInstance, int(module.ImportGlobalCount)+len(module.GlobalSection))
@@ -424,7 +492,12 @@ func (s *Store) instantiate(
 	for _, exp := range m.Exports {
 		if exp.Type == ExternTypeTable {
 			t := m.Tables[exp.Index]
+			// A re-exported imported table is shared with other instances:
+			// append under the same lock the import path uses (C59 in
+			// codebase-audit-2026-10-18.md).
+			t.involvingModuleInstancesMutex.Lock()
 			t.involvingModuleInstances = append(t.involvingModuleInstances, m)
+			t.involvingModuleInstancesMutex.Unlock()
 		}
 	}
 
@@ -440,12 +513,16 @@ func (s *Store) instantiate(
 	// After engine creation, we can create the funcref element instances and initialize funcref type globals.
 	m.buildElementInstances(module.ElementSection)
 
+	// Apply element segments before data segments: the spec instantiation
+	// order is elements first, and an out-of-bounds element segment must fail
+	// before data segments are (partially) applied (C54 in
+	// codebase-audit-2026-10-18.md).
+	m.applyElements(module.ElementSection)
+
 	// Now all the validation passes, we are safe to mutate memory instances (possibly imported ones).
 	if err = m.applyData(module.DataSection); err != nil {
 		return nil, err
 	}
-
-	m.applyElements(module.ElementSection)
 
 	m.Engine.DoneInstantiation()
 
@@ -483,6 +560,11 @@ func (m *ModuleInstance) resolveImports(ctx context.Context, module *Module) (er
 				if !ok {
 					return fmt.Errorf("import resolver for module[%s] returned an unsupported module type %T", moduleName, v)
 				}
+				if mi.IsClosed() {
+					// A closed module's engine may already be released; linking it
+					// would call freed code (C38 in codebase-audit-2026-10-18.md).
+					return fmt.Errorf("import resolver for module[%s] returned a closed module", moduleName)
+				}
 				importedModule = mi
 			}
 		}
@@ -492,6 +574,8 @@ func (m *ModuleInstance) resolveImports(ctx context.Context, module *Module) (er
 				return err
 			}
 		}
+
+		src := importedModule.Source
 
 		for _, i := range imports {
 			var imported *Export
@@ -503,15 +587,29 @@ func (m *ModuleInstance) resolveImports(ctx context.Context, module *Module) (er
 			switch i.Type {
 			case ExternTypeFunc:
 				expectedType := &module.TypeSection[i.DescFunc]
-				src := importedModule.Source
 				actual := src.typeOfFunction(imported.Index)
-				matched := false
-				if m.TypeIDs != nil && importedModule.TypeIDs != nil {
-					// Use structural type IDs for comparison (handles concrete ref types across modules).
-					actualTypeIdx, ok := src.typeIndexOfFunction(imported.Index)
-					matched = ok && importedModule.TypeIDs[actualTypeIdx] == m.TypeIDs[i.DescFunc]
-				} else {
-					matched = actual.EqualsSignature(expectedType.Params, expectedType.Results)
+				// Compare structurally across the two modules: concrete reference
+				// types may appear at different type section indexes in each
+				// module, and the store's type-ID keying is not trusted for
+				// cross-module comparison (C13 in codebase-audit-2026-10-18.md).
+				matched := actual != nil &&
+					len(actual.Params) == len(expectedType.Params) &&
+					len(actual.Results) == len(expectedType.Results)
+				if matched {
+					for pi := range expectedType.Params {
+						if !valueTypesEquivalentAcrossModules(module, src, expectedType.Params[pi], actual.Params[pi]) {
+							matched = false
+							break
+						}
+					}
+				}
+				if matched {
+					for ri := range expectedType.Results {
+						if !valueTypesEquivalentAcrossModules(module, src, expectedType.Results[ri], actual.Results[ri]) {
+							matched = false
+							break
+						}
+					}
 				}
 				if !matched {
 					err = errorInvalidImport(i, fmt.Errorf("signature mismatch: %s != %s", expectedType, actual))
@@ -522,7 +620,10 @@ func (m *ModuleInstance) resolveImports(ctx context.Context, module *Module) (er
 			case ExternTypeTable:
 				expected := i.DescTable
 				importedTable := importedModule.Tables[imported.Index]
-				if expected.Type != importedTable.Type {
+				// The table element type may be a concrete reference type whose
+				// index is module-local: compare structurally across the two
+				// modules (C13 in codebase-audit-2026-10-18.md).
+				if !valueTypesEquivalentAcrossModules(module, src, expected.Type, importedTable.Type) {
 					err = errorInvalidImport(i, fmt.Errorf("table type mismatch: %s != %s",
 						RefTypeName(expected.Type), RefTypeName(importedTable.Type)))
 					return
@@ -563,6 +664,14 @@ func (m *ModuleInstance) resolveImports(ctx context.Context, module *Module) (er
 					err = errorMaxSizeMismatch(i, expected.Max, importedMemory.Max)
 					return
 				}
+				// A shared/non-shared mismatch must be rejected: sharing is
+				// observable through synchronization semantics (C55 in
+				// codebase-audit-2026-10-18.md).
+				if expected.IsShared != importedMemory.Shared {
+					err = errorInvalidImport(i, fmt.Errorf("shared mismatch: %t != %t",
+						expected.IsShared, importedMemory.Shared))
+					return
+				}
 				m.MemoryInstance = importedMemory
 				m.Engine.ResolveImportedMemory(importedModule.Engine)
 			case ExternTypeGlobal:
@@ -575,8 +684,8 @@ func (m *ModuleInstance) resolveImports(ctx context.Context, module *Module) (er
 					return
 				}
 
-				if expected.Mutable && expected.ValType != importedGlobal.Type.ValType ||
-					!expected.Mutable && !isRefSubtypeOf(importedGlobal.Type.ValType, expected.ValType) {
+				if expected.Mutable && !valueTypesEquivalentAcrossModules(module, src, expected.ValType, importedGlobal.Type.ValType) ||
+					!expected.Mutable && !isRefSubtypeOfAcrossModules(src, module, importedGlobal.Type.ValType, expected.ValType) {
 					err = errorInvalidImport(i, fmt.Errorf("value type mismatch: %s != %s",
 						ValueTypeName(expected.ValType), ValueTypeName(importedGlobal.Type.ValType)))
 					return
@@ -585,7 +694,18 @@ func (m *ModuleInstance) resolveImports(ctx context.Context, module *Module) (er
 			case ExternTypeTag:
 				expected := &module.TypeSection[i.DescTag]
 				importedTag := importedModule.Tags[imported.Index]
-				if !importedTag.Type.EqualsType(expected) {
+				// Locate the exporter's type section index for the tag type so the
+				// comparison can resolve concrete reference indexes on both sides
+				// structurally (C13 in codebase-audit-2026-10-18.md).
+				exporterTypeIdx := Index(^uint32(0))
+				for j := range src.TypeSection {
+					if &src.TypeSection[j] == importedTag.Type {
+						exporterTypeIdx = Index(j)
+						break
+					}
+				}
+				if exporterTypeIdx == Index(^uint32(0)) ||
+					!structurallyEquivalentTypesAcrossModules(module, src, i.DescTag, uint32(exporterTypeIdx)) {
 					err = errorInvalidImport(i, fmt.Errorf("tag type mismatch: %s != %s",
 						expected, importedTag.Type))
 					return
@@ -641,11 +761,21 @@ func (g *GlobalInstance) initialize(importedGlobals []*GlobalInstance, expr *Con
 func (g *GlobalInstance) String() string {
 	switch g.Type.ValType {
 	case ValueTypeI32, ValueTypeI64:
-		return fmt.Sprintf("global(%d)", g.Val)
+		lo, _ := g.Value()
+		return fmt.Sprintf("global(%d)", lo)
 	case ValueTypeF32:
-		return fmt.Sprintf("global(%f)", api.DecodeF32(g.Val))
+		lo, _ := g.Value()
+		return fmt.Sprintf("global(%f)", api.DecodeF32(lo))
 	case ValueTypeF64:
-		return fmt.Sprintf("global(%f)", api.DecodeF64(g.Val))
+		lo, _ := g.Value()
+		return fmt.Sprintf("global(%f)", api.DecodeF64(lo))
+	case ValueTypeV128, ValueTypeFuncref, ValueTypeExternref, ValueTypeExnref:
+		if g.Type.ValType.IsConcreteRef() || g.Type.ValType == ValueTypeV128 ||
+			g.Type.ValType == ValueTypeFuncref || g.Type.ValType == ValueTypeExternref ||
+			g.Type.ValType == ValueTypeExnref {
+			return fmt.Sprintf("global(%s)", ValueTypeName(g.Type.ValType))
+		}
+		panic(fmt.Errorf("BUG: unknown value type %X", g.Type.ValType))
 	default:
 		panic(fmt.Errorf("BUG: unknown value type %X", g.Type.ValType))
 	}
@@ -748,11 +878,20 @@ func (s *Store) GetFunctionTypeID(t *FunctionType) (FunctionTypeID, error) {
 
 func (s *Store) getFunctionTypeIDByKey(key string) (FunctionTypeID, error) {
 	s.mux.RLock()
+	if s.typeIDs == nil {
+		// The store is closed: writing to the nil map would panic (C41 in
+		// codebase-audit-2026-10-18.md).
+		s.mux.RUnlock()
+		return 0, errors.New("store closed")
+	}
 	id, ok := s.typeIDs[key]
 	s.mux.RUnlock()
 	if !ok {
 		s.mux.Lock()
 		defer s.mux.Unlock()
+		if s.typeIDs == nil {
+			return 0, errors.New("store closed")
+		}
 		// Check again in case another goroutine has already added the type.
 		if id, ok = s.typeIDs[key]; ok {
 			return id, nil
@@ -770,18 +909,28 @@ func (s *Store) getFunctionTypeIDByKey(key string) (FunctionTypeID, error) {
 // CloseWithExitCode implements the same method as documented on wazero.Runtime.
 func (s *Store) CloseWithExitCode(ctx context.Context, exitCode uint32) error {
 	s.mux.Lock()
-	defer s.mux.Unlock()
-	// Close modules in reverse initialization order.
-	var errs []error
+	// Snapshot the module list and clear the store state under the lock, but
+	// close the modules outside of it: CloseNotifier callbacks run during
+	// close and may call back into the store (e.g. Runtime.Module), which
+	// would deadlock on the non-reentrant lock (C58 in
+	// codebase-audit-2026-10-18.md).
+	var modules []*ModuleInstance
 	for m := s.moduleList; m != nil; m = m.next {
-		// If closing this module errs, proceed anyway to close the others.
-		if err := m.closeWithExitCode(ctx, exitCode); err != nil {
-			errs = append(errs, err)
-		}
+		modules = append(modules, m)
 	}
 	s.moduleList = nil
 	s.nameToModule = nil
 	s.nameToModuleCap = 0
 	s.typeIDs = nil
+	s.mux.Unlock()
+
+	// Close modules in reverse initialization order.
+	var errs []error
+	for _, m := range modules {
+		// If closing this module errs, proceed anyway to close the others.
+		if err := m.closeWithExitCode(ctx, exitCode); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errors.Join(errs...)
 }
