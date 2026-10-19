@@ -1872,8 +1872,20 @@ func (m *machine) lowerPopcnt(x, result ssa.Value) {
 	//    mov x5, v0.d[0]     ;; finally we mov the result back to a GPR
 	//
 
-	rd := m.compiler.VRegOf(result)
 	rn := m.getOperand_NR(m.compiler.ValueDefinition(x), extModeNone)
+	if x.Type().Bits() == 32 {
+		// Zero-extend the i32 value first: i32 values are allowed to hold
+		// garbage in the upper 32 bits (and i32.load8_s/i32.load16_s are
+		// emitted with the 64-bit LDRSB/LDRSH forms, which sign-fill them),
+		// and the popcount below must only cover the low 32 bits.
+		zeroExt := m.allocateInstr()
+		tmp := m.compiler.AllocateVReg(ssa.TypeI64)
+		zeroExt.asExtend(tmp, rn.nr(), 32, 64, false)
+		m.insert(zeroExt)
+		rn = operandNR(tmp)
+	}
+
+	rd := m.compiler.VRegOf(result)
 
 	rf1 := operandNR(m.compiler.AllocateVReg(ssa.TypeF64))
 	ins := m.allocateInstr()
@@ -1882,7 +1894,10 @@ func (m *machine) lowerPopcnt(x, result ssa.Value) {
 
 	rf2 := operandNR(m.compiler.AllocateVReg(ssa.TypeF64))
 	cnt := m.allocateInstr()
-	cnt.asVecMisc(vecOpCnt, rf2.nr(), rf1, vecArrangement16B)
+	// Count exactly the 8 bytes written by the INS above: the 16b arrangement
+	// would also count the upper half of the vector lane, which is stale
+	// garbage (C10 in codebase-audit-2026-10-18.md).
+	cnt.asVecMisc(vecOpCnt, rf2.nr(), rf1, vecArrangement8B)
 	m.insert(cnt)
 
 	rf3 := operandNR(m.compiler.AllocateVReg(ssa.TypeF64))

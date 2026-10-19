@@ -6,10 +6,10 @@
 // See the comments on EmitGoEntryPreamble for what this function is supposed to do.
 TEXT ·entrypoint(SB), NOSPLIT|NOFRAME, $0-48
 	MOVD preambleExecutable+0(FP), R27
-	MOVD functionExectuable+8(FP), R24
+	MOVD functionExecutable+8(FP), R24
 	MOVD executionContextPtr+16(FP), R0
 	MOVD moduleContextPtr+24(FP), R1
-	MOVD paramResultSlicePtr+32(FP), R19
+	MOVD paramResultPtr+32(FP), R19
 	MOVD goAllocatedStackSlicePtr+40(FP), R26
 	JMP  (R27)
 
