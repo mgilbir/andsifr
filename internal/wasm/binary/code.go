@@ -10,6 +10,12 @@ import (
 	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
+// maxFunctionLocals bounds the total number of locals declared for a single function.
+// The count is not derivable from the input size (a two-byte local group can declare
+// billions of locals), so it is capped explicitly to avoid an enormous allocation from
+// a malformed module. This is far above any real function (V8 caps at 50,000).
+const maxFunctionLocals = 1_000_000
+
 func decodeCode(r *bytes.Reader, codeSectionStart uint64, ret *wasm.Code) (err error) {
 	ss, _, err := leb128.DecodeUint32(r)
 	if err != nil {
@@ -66,6 +72,8 @@ func decodeCode(r *bytes.Reader, codeSectionStart uint64, ret *wasm.Code) (err e
 
 	if sum > math.MaxUint32 {
 		return fmt.Errorf("too many locals: %d", sum)
+	} else if sum > maxFunctionLocals {
+		return fmt.Errorf("too many locals: %d exceeds the limit of %d", sum, maxFunctionLocals)
 	}
 
 	// Rewind the buffer.

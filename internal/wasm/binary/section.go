@@ -10,6 +10,17 @@ import (
 	"github.com/mgilbir/andsifr/internal/wasm"
 )
 
+// ensureVectorCountFits returns an error if the decoded vector count cannot possibly
+// be satisfied by the remaining bytes in r, as every element of a vector occupies at
+// least one byte. This bounds the allocation made before any element is decoded, so a
+// malformed module cannot make the decoder allocate gigabytes from a small input.
+func ensureVectorCountFits(r *bytes.Reader, vs uint32, what string) error {
+	if uint64(vs) > uint64(r.Len()) {
+		return fmt.Errorf("%s vector count %d exceeds remaining bytes %d", what, vs, r.Len())
+	}
+	return nil
+}
+
 func decodeTypeSection(enabledFeatures api.CoreFeatures, r *bytes.Reader) ([]wasm.FunctionType, error) {
 	vs, _, err := leb128.DecodeUint32(r)
 	if err != nil {
@@ -95,6 +106,9 @@ func decodeImportSection(
 		err = fmt.Errorf("get size of vector: %w", err)
 		return
 	}
+	if err = ensureVectorCountFits(r, vs, "import"); err != nil {
+		return
+	}
 
 	perModule = make(map[string][]*wasm.Import)
 	result = make([]wasm.Import, vs)
@@ -130,6 +144,9 @@ func decodeFunctionSection(r *bytes.Reader) ([]uint32, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get size of vector: %w", err)
 	}
+	if err = ensureVectorCountFits(r, vs, "function"); err != nil {
+		return nil, err
+	}
 
 	result := make([]uint32, vs)
 	for i := uint32(0); i < vs; i++ {
@@ -149,6 +166,10 @@ func decodeTableSection(r *bytes.Reader, enabledFeatures api.CoreFeatures) ([]wa
 		if err := enabledFeatures.RequireEnabled(api.CoreFeatureReferenceTypes); err != nil {
 			return nil, fmt.Errorf("at most one table allowed in module as %w", err)
 		}
+	}
+
+	if err := ensureVectorCountFits(r, vs, "table"); err != nil {
+		return nil, err
 	}
 
 	ret := make([]wasm.Table, vs)
@@ -186,6 +207,9 @@ func decodeGlobalSection(r *bytes.Reader, enabledFeatures api.CoreFeatures) ([]w
 	if err != nil {
 		return nil, fmt.Errorf("get size of vector: %w", err)
 	}
+	if err = ensureVectorCountFits(r, vs, "global"); err != nil {
+		return nil, err
+	}
 
 	result := make([]wasm.Global, vs)
 	for i := uint32(0); i < vs; i++ {
@@ -200,6 +224,10 @@ func decodeExportSection(r *bytes.Reader) ([]wasm.Export, map[string]*wasm.Expor
 	vs, _, sizeErr := leb128.DecodeUint32(r)
 	if sizeErr != nil {
 		return nil, nil, fmt.Errorf("get size of vector: %v", sizeErr)
+	}
+
+	if err := ensureVectorCountFits(r, vs, "export"); err != nil {
+		return nil, nil, err
 	}
 
 	exportMap := make(map[string]*wasm.Export, vs)
@@ -232,6 +260,9 @@ func decodeElementSection(r *bytes.Reader, enabledFeatures api.CoreFeatures) ([]
 	if err != nil {
 		return nil, fmt.Errorf("get size of vector: %w", err)
 	}
+	if err = ensureVectorCountFits(r, vs, "element"); err != nil {
+		return nil, err
+	}
 
 	result := make([]wasm.ElementSegment, vs)
 	for i := uint32(0); i < vs; i++ {
@@ -247,6 +278,9 @@ func decodeCodeSection(r *bytes.Reader) ([]wasm.Code, error) {
 	vs, _, err := leb128.DecodeUint32(r)
 	if err != nil {
 		return nil, fmt.Errorf("get size of vector: %w", err)
+	}
+	if err = ensureVectorCountFits(r, vs, "code"); err != nil {
+		return nil, err
 	}
 
 	result := make([]wasm.Code, vs)
@@ -264,6 +298,9 @@ func decodeDataSection(r *bytes.Reader, enabledFeatures api.CoreFeatures) ([]was
 	if err != nil {
 		return nil, fmt.Errorf("get size of vector: %w", err)
 	}
+	if err = ensureVectorCountFits(r, vs, "data"); err != nil {
+		return nil, err
+	}
 
 	result := make([]wasm.DataSegment, vs)
 	for i := uint32(0); i < vs; i++ {
@@ -278,6 +315,9 @@ func decodeTagSection(r *bytes.Reader) ([]wasm.Tag, error) {
 	vs, _, err := leb128.DecodeUint32(r)
 	if err != nil {
 		return nil, fmt.Errorf("get size of vector: %w", err)
+	}
+	if err = ensureVectorCountFits(r, vs, "tag"); err != nil {
+		return nil, err
 	}
 
 	result := make([]wasm.Tag, vs)
