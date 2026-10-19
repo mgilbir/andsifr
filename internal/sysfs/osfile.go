@@ -119,6 +119,9 @@ func (f *osFile) reopen() (errno experimentalsys.Errno) {
 	}
 	errno = f.checkSameFile(file)
 	if errno != 0 {
+		// The freshly opened file must be closed or the descriptor leaks on
+		// every failed re-open (C79 in codebase-audit-2026-10-18.md).
+		_ = file.Close()
 		return errno
 	}
 

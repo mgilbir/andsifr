@@ -268,7 +268,7 @@ type FileTable = descriptor.Table[int32, *FileEntry]
 // OOM the host from a single guest call. This cap mirrors a generous
 // RLIMIT_NOFILE hard limit while keeping the worst-case table allocation small
 // (~8 MB of pointers).
-const maxFileDescriptor = 1 << 20
+var maxFileDescriptor = int32(1 << 20)
 
 // LookupFile returns a file if it is in the table.
 func (c *FSContext) LookupFile(fd int32) (*FileEntry, bool) {
@@ -278,6 +278,12 @@ func (c *FSContext) LookupFile(fd int32) (*FileEntry, bool) {
 // OpenFile opens the file into the table and returns its file descriptor.
 // The result must be closed by CloseFile or Close.
 func (c *FSContext) OpenFile(fs sys.FS, path string, flag sys.Oflag, perm fs.FileMode) (int32, sys.Errno) {
+	// Cap the descriptor table: a guest looping path_open would otherwise
+	// exhaust the host process descriptor limit and grow the table without
+	// bound (C19 in codebase-audit-2026-10-18.md).
+	if c.openedFiles.Len() >= int(maxFileDescriptor) {
+		return 0, sys.EMFILE
+	}
 	if f, errno := fs.OpenFile(path, flag, perm); errno != 0 {
 		return 0, errno
 	} else {
@@ -311,7 +317,9 @@ func (c *FSContext) Renumber(from, to int32) sys.Errno {
 	// The doc is unclear and other implementations do nothing for already-opened To FDs.
 	// https://github.com/WebAssembly/WASI/blob/snapshot-01/phases/snapshot/docs.md#-fd_renumberfd-fd-to-fd---errno
 	// https://github.com/bytecodealliance/wasmtime/blob/main/crates/wasi-common/src/snapshots/preview_1.rs#L531-L546
-	if toFile, ok := c.openedFiles.Lookup(to); ok {
+	if toFile, ok := c.openedFiles.Lookup(to); ok && to != from {
+		// Renumbering onto itself is a no-op: closing here would close the
+		// very file being renumbered (C47 in codebase-audit-2026-10-18.md).
 		if toFile.IsPreopen {
 			return sys.ENOTSUP
 		}
@@ -338,6 +346,13 @@ func (c *FSContext) SockAccept(sockFD int32, nonblock bool) (int32, sys.Errno) {
 	conn, errno := sock.Accept()
 	if errno != 0 {
 		return 0, errno
+	}
+
+	// Cap the descriptor table (see FSContext.OpenFile, C19 in
+	// codebase-audit-2026-10-18.md).
+	if c.openedFiles.Len() >= int(maxFileDescriptor) {
+		_ = conn.Close()
+		return 0, sys.EMFILE
 	}
 
 	fe := &FileEntry{File: conn}

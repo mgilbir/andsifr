@@ -365,3 +365,25 @@ func TestStripPrefixesAndTrailingSlash(t *testing.T) {
 		})
 	}
 }
+
+// TestFSContext_OpenFile_cap ensures the descriptor table cannot grow without
+// bound from guest path_open calls (C19 in codebase-audit-2026-10-18.md):
+// after the cap, OpenFile returns EMFILE instead of exhausting the host
+// process descriptor limit.
+func TestFSContext_OpenFile_cap(t *testing.T) {
+	prev := maxFileDescriptor
+	maxFileDescriptor = 8 // shrink to keep the test small
+	defer func() { maxFileDescriptor = prev }()
+
+	fsc := &FSContext{}
+	dirfs := sysfs.DirFS(".")
+	// Fill up to the cap.
+	for i := 0; i < 8; i++ {
+		fd, errno := fsc.OpenFile(dirfs, "fs_test.go", 0, 0)
+		require.Equal(t, sys.Errno(0), errno)
+		require.True(t, fd >= 0)
+	}
+	fd, errno := fsc.OpenFile(dirfs, "fs_test.go", 0, 0)
+	require.Equal(t, sys.EMFILE, errno)
+	require.Equal(t, int32(0), fd)
+}

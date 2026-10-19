@@ -121,7 +121,12 @@ func (d *lazyDir) file() (experimentalsys.File, bool) {
 	case experimentalsys.ENOENT:
 		return nil, false
 	default:
-		panic(errno) // unexpected
+		// Resource errors (e.g. EMFILE when a guest exhausted the process
+		// descriptor limit via path_open, C19 in
+		// codebase-audit-2026-10-18.md) must not panic the host: callers map
+		// !ok to EBADF, which surfaces as a guest-visible error and can be
+		// retried once descriptors are released.
+		return nil, false
 	}
 }
 
