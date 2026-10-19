@@ -215,7 +215,9 @@ Also fixed en route: `require.equalsPointer` `reflect.Ptr` deprecation, `example
   commit.yaml so any ref can be validated on demand, and the full platform
   matrix was run against the fix series (two CI-only test fixes landed on the
   way: the arm64 integer-bit-count goldens for the C10 change and the
-  working-directory assumption in TestFSContext_OpenFile_cap).
+  working-directory assumption in TestFSContext_OpenFile_cap). The
+  riscv64 scratch-runner jobs were dropped from the matrix: the
+  ubuntu-24.04-riscv runner queued indefinitely (maintainer decision).
 
 ### Fixed this session, part 2 (C12–C15)
 

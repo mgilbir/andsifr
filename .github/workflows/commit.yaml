@@ -125,8 +125,9 @@ jobs:
             no_prot_exec: true
           - os: ubuntu-24.04-arm
             arch: arm64
-          - os: ubuntu-24.04-riscv
-            arch: riscv64
+        # riscv64 was dropped: the ubuntu-24.04-riscv hosted runner is in
+        # limited public preview and queued indefinitely (observed 2026-10-19);
+        # re-add when availability improves.
 
     steps:
 
