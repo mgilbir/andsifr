@@ -830,20 +830,22 @@ func readv(mem api.Memory, iovs uint32, iovsCount uint32, reader func(buf []byte
 		}
 
 		n, errno := reader(b)
-		nread += uint32(n)
+		// Raw Unix syscalls can return -1 alongside errno. Only positive
+		// counts represent bytes transferred.
+		if n > 0 {
+			nread += uint32(n)
+		}
 
-		if errno == experimentalsys.ENOSYS {
-			// e.g. unimplemented for read. If some bytes were already
-			// transferred, report them instead of discarding them.
+		if errno != 0 {
+			// WASI has no byte-count result on error. Preserve progress as a
+			// successful short read, including bytes returned alongside an error.
 			if nread > 0 {
 				return nread, 0
 			}
-			return 0, experimentalsys.EBADF
-		} else if errno != 0 {
-			// POSIX readv returns the number of bytes read before the error,
-			// so a retry does not duplicate or lose the partial transfer
-			// (C21 in codebase-audit-2026-10-18.md).
-			return nread, errno
+			if errno == experimentalsys.ENOSYS {
+				errno = experimentalsys.EBADF
+			}
+			return 0, errno
 		} else if n < int(l) {
 			break // stop when we read less than capacity.
 		}
@@ -1317,18 +1319,22 @@ func writev(mem api.Memory, iovs uint32, iovsCount uint32, writer func(buf []byt
 			return 0, experimentalsys.EFAULT
 		}
 		n, errno := writer(b)
-		nwritten += uint32(n)
-		if errno == experimentalsys.ENOSYS {
-			// e.g. unimplemented for write: report bytes already transferred.
+		if n > 0 {
+			nwritten += uint32(n)
+		}
+		if errno != 0 {
+			// Report completed bytes as a successful short write so callers do
+			// not retry data which has already reached the file or socket.
 			if nwritten > 0 {
 				return nwritten, 0
 			}
-			return 0, experimentalsys.EBADF
-		} else if errno != 0 {
-			// POSIX writev returns the bytes written before the error, so a
-			// retry does not duplicate the partial transfer (C21 in
-			// codebase-audit-2026-10-18.md).
-			return nwritten, errno
+			if errno == experimentalsys.ENOSYS {
+				errno = experimentalsys.EBADF
+			}
+			return 0, errno
+		}
+		if n < len(b) {
+			break
 		}
 	}
 	return nwritten, 0
