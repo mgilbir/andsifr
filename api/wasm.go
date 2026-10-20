@@ -193,6 +193,10 @@ type Module interface {
 	//
 	// Calling this inside a host function is safe, and may cause ExportedFunction callers to receive a sys.ExitError
 	// with the exitCode.
+	//
+	// Memory shared through imports or tables remains allocated while a live
+	// module can use it. Custom allocator memory is released after those modules
+	// close and guest calls already in flight at retirement have returned.
 	CloseWithExitCode(ctx context.Context, exitCode uint32) error
 
 	// Closer closes this module by delegating to CloseWithExitCode with an exit code of zero.

@@ -143,18 +143,13 @@ type (
 		// applied a second time (audit finding C8).
 		willRunStartFunctions bool
 
-		// executingCalls counts guest executions in flight on this module.
-		// Together with freeMux/freePending it defers the Free of an
-		// allocator-backed linear memory until no guest code is executing, so a
-		// concurrent Close cannot free memory still in use by the JIT or the
-		// interpreter (audit finding C11).
-		executingCalls atomic.Int64
-		// freePending is set when a Close wanted to free the allocator-backed
-		// memory but guest code was executing; the last endExecution frees it.
-		freePending atomic.Bool
-		// freeMux guards the deferred free of expBuffer against racing with the
-		// immediate free in ensureResourcesClosed.
-		freeMux sync.Mutex
+		// Imports keep their dependencies' allocations alive after Close. These
+		// fields are guarded by guestExecutions.Mutex. Shared tables also retain
+		// their importers, whose functions may escape into the table.
+		importedModules []*ModuleInstance
+		importers       map[*ModuleInstance]uint32
+		memoryClosed    bool
+		memoryReleased  bool
 
 		// CloseNotifier is an experimental hook called once on close.
 		CloseNotifier experimental.CloseNotifier
@@ -322,7 +317,7 @@ func (m *ModuleInstance) applyData(data []DataSegment) error {
 	// Refusing the skip here keeps the feature safe-by-construction for
 	// start-free modules.
 	skipCopy := false
-	if mem := m.MemoryInstance; mem != nil && mem.expBuffer != nil && !mem.Shared {
+	if mem := m.MemoryInstance; mem != nil && mem.expBuffer != nil && !mem.Shared && m.Source.ImportMemoryCount == 0 {
 		if p, ok := mem.expBuffer.(experimental.MemoryWithPreappliedData); ok {
 			if !hasImportDependentDataOffsets(data) && m.Source.StartSection == nil &&
 				!m.willRunStartFunctions && p.PreappliedDataFor(m.Source.ID) {
@@ -463,6 +458,14 @@ func (s *Store) instantiate(
 	willRunStartFunctions bool,
 ) (m *ModuleInstance, err error) {
 	m = &ModuleInstance{ModuleName: name, TypeIDs: typeIDs, Sys: sysCtx, s: s, Source: module, willRunStartFunctions: willRunStartFunctions}
+	// Failed instances never enter the store's module list. Release any memory
+	// and import references acquired before a data or start-function trap.
+	instance := m
+	defer func() {
+		if err != nil {
+			_ = instance.Close(ctx)
+		}
+	}()
 
 	m.Tables = make([]*TableInstance, int(module.ImportTableCount)+len(module.TableSection))
 	m.Globals = make([]*GlobalInstance, int(module.ImportGlobalCount)+len(module.GlobalSection))
@@ -574,6 +577,9 @@ func (m *ModuleInstance) resolveImports(ctx context.Context, module *Module) (er
 				return err
 			}
 		}
+		if !m.retainImport(importedModule) {
+			return fmt.Errorf("module[%s] is closed", moduleName)
+		}
 
 		src := importedModule.Source
 
@@ -645,6 +651,10 @@ func (m *ModuleInstance) resolveImports(ctx context.Context, module *Module) (er
 					}
 				}
 				m.Tables[i.IndexPerType] = importedTable
+				// The table may now contain functions of m, even if m later fails
+				// instantiation. Retain m for as long as the table's exporter is
+				// reachable. The resulting cycles are released together on Close.
+				importedModule.retainImport(m)
 				importedTable.involvingModuleInstancesMutex.Lock()
 				if len(importedTable.involvingModuleInstances) == 0 {
 					panic("BUG: involvingModuleInstances must not be nil when it's imported")

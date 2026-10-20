@@ -756,10 +756,11 @@ func (ce *callEngine) CallWithStack(ctx context.Context, stack []uint64) error {
 
 func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []uint64, err error) {
 	m := ce.f.moduleInstance
-	if !m.BeginExecution() {
+	execution := m.BeginExecution()
+	if execution == nil {
 		return nil, m.FailIfClosed()
 	}
-	defer m.EndExecution()
+	defer execution.EndExecution()
 	if ce.f.parent.ensureTermination {
 		select {
 		case <-ctx.Done():

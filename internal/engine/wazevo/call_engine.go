@@ -280,10 +280,11 @@ func (c *callEngine) callWithStack(ctx context.Context, paramResultStack []uint6
 	p := c.parent
 	ensureTermination := p.parent.ensureTermination
 	m := p.module
-	if !m.BeginExecution() {
+	execution := m.BeginExecution()
+	if execution == nil {
 		return m.FailIfClosed()
 	}
-	defer m.EndExecution()
+	defer execution.EndExecution()
 	if ensureTermination {
 		select {
 		case <-ctx.Done():

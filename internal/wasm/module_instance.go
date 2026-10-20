@@ -91,40 +91,6 @@ func (m *ModuleInstance) String() string {
 	return fmt.Sprintf("Module[%s]", m.Name())
 }
 
-// beginExecution records that guest code is executing on this module. It
-// returns false if the module is already closed, in which case the caller must
-// not execute and must not call EndExecution.
-//
-// A concurrent Close must not free the linear memory backing executing guest
-// code (C11 in codebase-audit-2026-10-18.md): when guest code is in flight,
-// the free is deferred to the last EndExecution.
-func (m *ModuleInstance) BeginExecution() bool {
-	m.executingCalls.Add(1)
-	if m.Closed.Load() != 0 {
-		m.EndExecution()
-		return false
-	}
-	return true
-}
-
-// endExecution records the completion of one guest execution begun with
-// beginExecution, and performs any memory free deferred by Close.
-func (m *ModuleInstance) EndExecution() {
-	if m.executingCalls.Add(-1) != 0 {
-		return
-	}
-	if !m.freePending.Load() {
-		return
-	}
-	m.freeMux.Lock()
-	if mem := m.MemoryInstance; mem != nil && mem.ownerModuleEngine == m.Engine && mem.expBuffer != nil {
-		mem.expBuffer.Free()
-		mem.expBuffer = nil
-	}
-	m.freePending.Store(false)
-	m.freeMux.Unlock()
-}
-
 // Close implements the same method as documented on api.Module.
 func (m *ModuleInstance) Close(ctx context.Context) (err error) {
 	return m.CloseWithExitCode(ctx, 0)
@@ -189,21 +155,7 @@ func (m *ModuleInstance) ensureResourcesClosed(ctx context.Context) (err error) 
 		m.Sys = nil
 	}
 
-	if mem := m.MemoryInstance; mem != nil && mem.ownerModuleEngine == m.Engine {
-		m.freeMux.Lock()
-		if mem.expBuffer != nil {
-			if m.executingCalls.Load() > 0 {
-				// Guest code is executing on this module: freeing the memory now
-				// would cause a use-after-free in JIT code or the interpreter.
-				// Defer to the last EndExecution (audit finding C11).
-				m.freePending.Store(true)
-			} else {
-				mem.expBuffer.Free()
-				mem.expBuffer = nil
-			}
-		}
-		m.freeMux.Unlock()
-	}
+	m.retireMemory()
 
 	if m.CodeCloser != nil {
 		if e := m.CodeCloser.Close(ctx); err == nil {
