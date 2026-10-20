@@ -96,6 +96,8 @@ func (c *cache) initEngine(ek engineKind, ne newEngine, ctx context.Context, fea
 
 // Close implements the same method on the Cache interface.
 func (c *cache) Close(_ context.Context) (err error) {
+	c.engsMux.Lock()
+	defer c.engsMux.Unlock()
 	for _, eng := range c.engs {
 		if eng != nil {
 			if err = eng.Close(); err != nil {

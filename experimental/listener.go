@@ -2,6 +2,7 @@ package experimental
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/mgilbir/andsifr/api"
 	"github.com/mgilbir/andsifr/internal/expctxkeys"
@@ -24,10 +25,21 @@ type StackIterator interface {
 	ProgramCounter() ProgramCounter
 }
 
+var nextFunctionListenerFactoryID atomic.Uint64
+
 // WithFunctionListenerFactory registers a FunctionListenerFactory
-// with the context.
+// with the context. Reuse the returned context across compiles to share the
+// compilation cache for that registration. Each registration has its own identity,
+// including when the factory is a closure or a non-pointer value.
 func WithFunctionListenerFactory(ctx context.Context, factory FunctionListenerFactory) context.Context {
-	return context.WithValue(ctx, expctxkeys.FunctionListenerFactoryKey{}, factory)
+	ctx = context.WithValue(ctx, expctxkeys.FunctionListenerFactoryKey{}, factory)
+	// A registration identifies closures and non-pointer factory values without
+	// relying on code addresses or retaining a global registry of factories.
+	var id uint64
+	if factory != nil {
+		id = nextFunctionListenerFactoryID.Add(1)
+	}
+	return context.WithValue(ctx, expctxkeys.FunctionListenerFactoryIDKey{}, id)
 }
 
 // FunctionListenerFactory returns FunctionListeners to be notified when a

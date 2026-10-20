@@ -212,11 +212,9 @@ const (
 // AssignModuleID calculates a sha256 checksum on `wasm` and other args, and set Module.ID to the result.
 // See the doc on Module.ID on what it's used for.
 //
-// listenerFactory (may be nil) participates in the identity: two compiles of
-// the same binary with different listener factories must not share a compiled
-// module, or the second would run the first factory's listeners (C34 in
-// codebase-audit-2026-10-18.md).
-func (m *Module) AssignModuleID(wasm []byte, listeners []experimental.FunctionListener, listenerFactory any, withEnsureTermination bool) {
+// listenerFactoryID identifies a context registration, including closure state.
+// Zero means no factory. Compiles using the same context can share listeners.
+func (m *Module) AssignModuleID(wasm []byte, listeners []experimental.FunctionListener, listenerFactoryID uint64, withEnsureTermination bool) {
 	h := sha256.New()
 	h.Write(wasm)
 	// Use the pre-allocated space backed by m.ID below.
@@ -227,10 +225,9 @@ func (m *Module) AssignModuleID(wasm []byte, listeners []experimental.FunctionLi
 		m.ID[4] = boolToByte(l != nil)
 		h.Write(m.ID[:5])
 	}
-	if listenerFactory != nil {
-		// Per-process pointer identity: the same factory yields the same ID
-		// (cache hits still work); a different factory recompiles.
-		fmt.Fprintf(h, "factory=%p", listenerFactory)
+	if listenerFactoryID != 0 {
+		binary.LittleEndian.PutUint64(m.ID[:], listenerFactoryID)
+		h.Write(m.ID[:8])
 	}
 	// Write the flag of ensureTermination to the checksum.
 	m.ID[0] = boolToByte(withEnsureTermination)

@@ -5,3 +5,7 @@ package expctxkeys
 //
 // See https://github.com/tetratelabs/wazero/issues/451
 type FunctionListenerFactoryKey struct{}
+
+// FunctionListenerFactoryIDKey identifies a listener factory context registration.
+// Its value is a uint64, stable across compiles using that context.
+type FunctionListenerFactoryIDKey struct{}

@@ -273,8 +273,8 @@ func (r *runtime) CompileModule(ctx context.Context, binary []byte) (CompiledMod
 	if err != nil {
 		return nil, err
 	}
-	listenerFactory := ctx.Value(expctxkeys.FunctionListenerFactoryKey{})
-	internal.AssignModuleID(binary, listeners, listenerFactory, r.ensureTermination)
+	listenerFactoryID, _ := ctx.Value(expctxkeys.FunctionListenerFactoryIDKey{}).(uint64)
+	internal.AssignModuleID(binary, listeners, listenerFactoryID, r.ensureTermination)
 	if err = r.store.Engine.CompileModule(ctx, internal, listeners, r.ensureTermination); err != nil {
 		return nil, err
 	}

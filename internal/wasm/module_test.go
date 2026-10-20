@@ -1045,7 +1045,7 @@ func TestModule_declaredFunctionIndexes(t *testing.T) {
 func TestModule_AssignModuleID(t *testing.T) {
 	getID := func(bin []byte, lsns []experimental.FunctionListener, withEnsureTermination bool) ModuleID {
 		m := Module{}
-		m.AssignModuleID(bin, lsns, nil, withEnsureTermination)
+		m.AssignModuleID(bin, lsns, 0, withEnsureTermination)
 		return m.ID
 	}
 
